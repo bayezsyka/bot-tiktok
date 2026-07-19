@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block title %}Detail Job {{ job.id[:8] }} - Farros TikTok Bot{% endblock %}
+
+{% block content %}
+<div class="dashboard-header flex-header">
+    <div>
+        <a href="/admin/history" class="back-link">&larr; Kembali ke Riwayat</a>
+        <h1>Detail Job #{{ job.id[:8] }}...</h1>
+        <p class="subtitle">UUID: {{ job.id }} | Inbound ID: {{ job.inbound_message_id }}</p>
+    </div>
+    <div>
+        {% if job.status == 'failed' %}
+        <form action="/admin/history/{{ job.id }}/retry" method="post" class="inline-form">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-warning">🔄 Retry Job Gagal</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+{% if message %}
+<div class="alert alert-success"><span>{{ message }}</span></div>
+{% endif %}
+{% if job.error_message %}
+<div class="alert alert-error">
+    <strong>Error Info:</strong> {{ job.error_code or 'FAILED' }} &mdash; {{ job.error_message }}
+</div>
+{% endif %}
+
+<div class="grid-layout detail-grid">
+    <div class="card">
+        <div class="card-header">
+            <h2>Informasi Job</h2>
+        </div>
+        <div class="detail-list">
+            <div class="detail-row">
+                <span class="detail-label">Status Terkini</span>
+                <span class="status-pill status-{{ job.status }}">{{ job.status }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Nomor Pengirim</span>
+                <span class="badge badge-phone">{{ job.sender_number }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Tipe Konten</span>
+                <span class="badge badge-type">{{ job.content_type or 'Belum terdeteksi' }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Original URL</span>
+                <a href="{{ job.original_url }}" target="_blank" class="word-break">{{ job.original_url }}</a>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Canonical URL</span>
+                <span class="word-break">{{ job.canonical_url or '-' }}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Media Count</span>
+                <span>{{ job.sent_count }} / {{ job.media_count }} berhasil terkirim{% if job.failed_count > 0 %} ({{ job.failed_count }} gagal){% endif %}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Ukuran Sumber vs Akhir</span>
+                <span>{{ (job.source_size_bytes / (1024*1024))|round(2) }} MB &rarr; {{ (job.final_size_bytes / (1024*1024))|round(2) }} MB</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Durasi Video</span>
+                <span>{{ job.duration_seconds }} detik</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Jumlah Percobaan (Attempts)</span>
+                <span>{{ job.attempt_count }} kali</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <h2>Lini Masa (Timeline)</h2>
+        </div>
+        <div class="timeline">
+            <div class="timeline-item">
+                <div class="timeline-marker marker-done"></div>
+                <div class="timeline-content">
+                    <h4>Masuk ke Antrean (Queued)</h4>
+                    <p>{{ job.queued_at.strftime('%Y-%m-%d %H:%M:%S') if job.queued_at else '-' }}</p>
+                </div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-marker {% if job.started_at %}marker-done{% else %}marker-pending{% endif %}"></div>
+                <div class="timeline-content">
+                    <h4>Mulai Diproses (Started)</h4>
+                    <p>{{ job.started_at.strftime('%Y-%m-%d %H:%M:%S') if job.started_at else 'Belum dimulai' }}</p>
+                </div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-marker {% if job.completed_at %}marker-done{% elif job.status == 'failed' %}marker-fail{% else %}marker-pending{% endif %}"></div>
+                <div class="timeline-content">
+                    <h4>Selesai / Akhir ({{ job.status|capitalize }})</h4>
+                    <p>{{ job.completed_at.strftime('%Y-%m-%d %H:%M:%S') if job.completed_at else 'Masih dalam proses' }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card items-card">
+    <div class="card-header">
+        <h2>Daftar Item Media (Slideshow / Video)</h2>
+    </div>
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Tipe Media</th>
+                    <th>Status Item</th>
+                    <th>Source Size</th>
+                    <th>Final Size</th>
+                    <th>Gateway Message ID</th>
+                    <th>Keterangan / Error</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>{{ item.position }}</td>
+                    <td><span class="badge badge-type">{{ item.media_type }}</span></td>
+                    <td><span class="status-pill status-{{ item.status }}">{{ item.status }}</span></td>
+                    <td>{{ (item.source_size_bytes / 1024)|round(1) }} KB</td>
+                    <td>{{ (item.final_size_bytes / 1024)|round(1) }} KB</td>
+                    <td><code>{{ item.gateway_message_id or '-' }}</code></td>
+                    <td class="text-error">{{ item.error_message or '-' }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center empty-state">Belum ada item media ekstraksi yang terdaftar.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

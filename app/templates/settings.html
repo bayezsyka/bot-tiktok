@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Pengaturan & Info Sistem - Farros TikTok Bot{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h1>Pengaturan Sistem & Parameter Aktif</h1>
+    <p class="subtitle">Parameter konfigurasi aplikasi production yang saat ini berjalan di memori</p>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>Konfigurasi Environment</h2>
+    </div>
+    <div class="table-responsive">
+        <table class="data-table settings-table">
+            <thead>
+                <tr>
+                    <th>Parameter</th>
+                    <th>Nilai Aktif</th>
+                    <th>Keterangan</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>APP_NAME</code></td>
+                    <td><strong>{{ settings.APP_NAME }}</strong></td>
+                    <td>Nama aplikasi pada tampilan dan header</td>
+                </tr>
+                <tr>
+                    <td><code>APP_ENV</code></td>
+                    <td><span class="badge badge-type">{{ settings.APP_ENV }}</span></td>
+                    <td>Lingkungan deployment aplikasi</td>
+                </tr>
+                <tr>
+                    <td><code>DATABASE_PATH</code></td>
+                    <td><code>{{ settings.DATABASE_PATH }}</code></td>
+                    <td>Lokasi file database SQLite (WAL mode)</td>
+                </tr>
+                <tr>
+                    <td><code>TEMP_DIR</code></td>
+                    <td><code>{{ settings.TEMP_DIR }}</code></td>
+                    <td>Lokasi direktori pengunduhan & pemrosesan media sementara</td>
+                </tr>
+                <tr>
+                    <td><code>FARROS_WA_BASE_URL</code></td>
+                    <td><code>{{ settings.FARROS_WA_BASE_URL }}</code></td>
+                    <td>URL utama Farros WA Gateway</td>
+                </tr>
+                <tr>
+                    <td><code>MAX_MEDIA_MB</code></td>
+                    <td><strong>{{ settings.MAX_MEDIA_MB }} MB</strong></td>
+                    <td>Batas maksimal ukuran file media yang dikirim ke WhatsApp</td>
+                </tr>
+                <tr>
+                    <td><code>MAX_SOURCE_DOWNLOAD_MB</code></td>
+                    <td><strong>{{ settings.MAX_SOURCE_DOWNLOAD_MB }} MB</strong></td>
+                    <td>Batas ukuran maksimal pengunduhan sumber media dari TikTok</td>
+                </tr>
+                <tr>
+                    <td><code>MAX_VIDEO_DURATION_SECONDS</code></td>
+                    <td><strong>{{ settings.MAX_VIDEO_DURATION_SECONDS }} detik</strong></td>
+                    <td>Batas durasi maksimal video TikTok yang diizinkan</td>
+                </tr>
+                <tr>
+                    <td><code>JOB_TIMEOUT_SECONDS</code></td>
+                    <td><strong>{{ settings.JOB_TIMEOUT_SECONDS }} detik</strong></td>
+                    <td>Batas waktu eksekusi maksimal untuk satu siklus job worker</td>
+                </tr>
+                <tr>
+                    <td><code>MAX_JOB_RETRIES</code></td>
+                    <td><strong>{{ settings.MAX_JOB_RETRIES }} kali</strong></td>
+                    <td>Jumlah maksimal pengulangan otomatis saat terjadi error jaringan/5xx</td>
+                </tr>
+                <tr>
+                    <td><code>TEMP_FILE_TTL_MINUTES</code></td>
+                    <td><strong>{{ settings.TEMP_FILE_TTL_MINUTES }} menit</strong></td>
+                    <td>Masa hidup folder dan file temporary sebelum dibersihkan otomatis</td>
+                </tr>
+                <tr>
+                    <td><code>RATE_LIMIT_REQUESTS</code></td>
+                    <td><strong>{{ settings.RATE_LIMIT_REQUESTS }} request / {{ settings.RATE_LIMIT_WINDOW_MINUTES }} menit</strong></td>
+                    <td>Batas pengiriman link TikTok per nomor telepon agar tidak spam</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

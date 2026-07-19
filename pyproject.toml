@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "farros-tiktok-bot"
+version = "1.0.0"
+description = "Production-ready Farros TikTok Bot receiving WA Gateway webhooks and processing media"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy>=2.0.30",
+    "aiosqlite>=0.20.0",
+    "jinja2>=3.1.4",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27.0",
+    "argon2-cffi>=23.1.0",
+    "itsdangerous>=2.2.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "pillow>=10.3.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "scripts", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501", # line length handled by ruff formatter/wrap where appropriate
+    "B008", # do not perform function calls in argument defaults (FastAPI Depends/Query)
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+strict_optional = true
+
+[[tool.mypy.overrides]]
+module = "app.database.models"
+# SQLAlchemy 2 mapped attributes
+disallow_untyped_defs = false

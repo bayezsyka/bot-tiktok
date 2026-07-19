@@ -1,0 +1,37 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Database and runtime storage (keep directory structure via .gitkeep)
+storage/database/*.sqlite
+storage/database/*.sqlite-journal
+storage/database/*.sqlite-wal
+storage/database/*.sqlite-shm
+storage/tmp/*
+!storage/tmp/.gitkeep
+storage/logs/*
+!storage/logs/.gitkeep
+!storage/database/.gitkeep
+
+# Environment secrets
+.env
+.env.local
+.env.*.local
+
+# pytest & linting
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db

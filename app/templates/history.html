@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Riwayat Job - Farros TikTok Bot{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h1>Riwayat Pemrosesan & Antrean Job</h1>
+    <p class="subtitle">Filter dan pantau setiap proses unduhan dan pengiriman media TikTok ke WhatsApp</p>
+</div>
+
+<div class="card filter-bar">
+    <form action="/admin/history" method="get" class="filter-form">
+        <div class="filter-group">
+            <label for="phone_number">Nomor WhatsApp</label>
+            <input type="text" id="phone_number" name="phone_number" value="{{ filter_phone }}" placeholder="Filter nomor...">
+        </div>
+        <div class="filter-group">
+            <label for="status">Status Job</label>
+            <select id="status" name="status">
+                <option value="all" {% if filter_status == 'all' %}selected{% endif %}>Semua Status</option>
+                <option value="queued" {% if filter_status == 'queued' %}selected{% endif %}>Queued</option>
+                <option value="extracting" {% if filter_status == 'extracting' %}selected{% endif %}>Extracting</option>
+                <option value="downloading" {% if filter_status == 'downloading' %}selected{% endif %}>Downloading</option>
+                <option value="processing" {% if filter_status == 'processing' %}selected{% endif %}>Processing</option>
+                <option value="sending" {% if filter_status == 'sending' %}selected{% endif %}>Sending</option>
+                <option value="completed" {% if filter_status == 'completed' %}selected{% endif %}>Completed</option>
+                <option value="failed" {% if filter_status == 'failed' %}selected{% endif %}>Failed</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="content_type">Tipe Konten</label>
+            <select id="content_type" name="content_type">
+                <option value="all" {% if filter_type == 'all' %}selected{% endif %}>Semua Tipe</option>
+                <option value="video" {% if filter_type == 'video' %}selected{% endif %}>Video</option>
+                <option value="photo" {% if filter_type == 'photo' %}selected{% endif %}>Foto / Slideshow</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="search">Pencarian URL / Kata Kunci</label>
+            <input type="text" id="search" name="search" value="{{ filter_search }}" placeholder="Cari link atau ID...">
+        </div>
+        <div class="filter-actions">
+            <button type="submit" class="btn btn-primary">Terapkan Filter</button>
+            <a href="/admin/history" class="btn btn-secondary">Reset</a>
+        </div>
+    </form>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2>Daftar Job (Total: {{ total_count }})</h2>
+    </div>
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Waktu Masuk</th>
+                    <th>Nomor Pengirim</th>
+                    <th>Link TikTok</th>
+                    <th>Tipe</th>
+                    <th>Media Terkirim</th>
+                    <th>Status</th>
+                    <th>Aksi</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for job in jobs %}
+                <tr>
+                    <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td><span class="badge badge-phone">{{ job.sender_number }}</span></td>
+                    <td class="td-url">
+                        <a href="{{ job.original_url }}" target="_blank" rel="noopener noreferrer">{{ job.original_url[:50] }}{% if job.original_url|length > 50 %}...{% endif %}</a>
+                    </td>
+                    <td><span class="badge badge-type">{{ job.content_type or '-' }}</span></td>
+                    <td>
+                        <span class="progress-pill {% if job.failed_count > 0 %}pill-partial{% elif job.sent_count == job.media_count and job.media_count > 0 %}pill-complete{% endif %}">
+                            {{ job.sent_count }} / {{ job.media_count }} terkirim
+                            {% if job.failed_count > 0 %}({{ job.failed_count }} gagal){% endif %}
+                        </span>
+                    </td>
+                    <td>
+                        <span class="status-pill status-{{ job.status }}">{{ job.status }}</span>
+                    </td>
+                    <td>
+                        <a href="/admin/history/{{ job.id }}" class="btn btn-outline btn-xs">Detail</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center empty-state">Tidak ada job yang sesuai kriteria filter.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if total_pages > 1 %}
+    <div class="pagination">
+        {% if page > 1 %}
+        <a href="?page={{ page - 1 }}&phone_number={{ filter_phone }}&status={{ filter_status }}&content_type={{ filter_type }}&search={{ filter_search }}" class="page-link">&laquo; Sebelumnya</a>
+        {% endif %}
+        
+        <span class="page-info">Halaman {{ page }} dari {{ total_pages }}</span>
+
+        {% if page < total_pages %}
+        <a href="?page={{ page + 1 }}&phone_number={{ filter_phone }}&status={{ filter_status }}&content_type={{ filter_type }}&search={{ filter_search }}" class="page-link">Selanjutnya &raquo;</a>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

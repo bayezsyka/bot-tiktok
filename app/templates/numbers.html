@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}Whitelist Nomor - Farros TikTok Bot{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h1>Manajemen Whitelist Nomor WhatsApp</h1>
+    <p class="subtitle">Atur daftar nomor WhatsApp yang diizinkan untuk mengirim link TikTok</p>
+</div>
+
+{% if error %}
+<div class="alert alert-error"><span>{{ error }}</span></div>
+{% endif %}
+{% if success %}
+<div class="alert alert-success"><span>{{ success }}</span></div>
+{% endif %}
+
+<div class="grid-layout">
+    <div class="card form-section">
+        <div class="card-header">
+            <h2>Tambah Nomor Baru</h2>
+        </div>
+        <form action="/admin/numbers" method="post" class="standard-form">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <div class="form-group">
+                <label for="name">Nama Pengguna <span class="required">*</span></label>
+                <input type="text" id="name" name="name" required placeholder="Contoh: Farros Sangkolo">
+            </div>
+            <div class="form-group">
+                <label for="phone_number">Nomor WhatsApp <span class="required">*</span></label>
+                <input type="text" id="phone_number" name="phone_number" required placeholder="Contoh: 08123456789 atau 628123456789">
+                <small class="form-text">Nomor akan otomatis dinormalisasi ke format 628xxx.</small>
+            </div>
+            <div class="form-group">
+                <label for="notes">Catatan (Opsional)</label>
+                <textarea id="notes" name="notes" rows="2" placeholder="Keterangan tambahan atau divisi"></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">+ Simpan Nomor</button>
+        </form>
+    </div>
+
+    <div class="card list-section">
+        <div class="card-header">
+            <h2>Daftar Nomor Terdaftar ({{ numbers|length }})</h2>
+        </div>
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Nama</th>
+                        <th>Nomor WhatsApp</th>
+                        <th>Total Job</th>
+                        <th>Terakhir Dipakai</th>
+                        <th>Status</th>
+                        <th>Aksi</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for num in numbers %}
+                    <tr>
+                        <td><strong>{{ num.name }}</strong><br><small class="text-muted">{{ num.notes or '' }}</small></td>
+                        <td><span class="badge badge-phone">{{ num.phone_number }}</span></td>
+                        <td>{{ num.total_jobs }}</td>
+                        <td>{{ num.last_used_at.strftime('%Y-%m-%d %H:%M') if num.last_used_at else '-' }}</td>
+                        <td>
+                            <form action="/admin/numbers/{{ num.id }}/toggle" method="post" class="inline-form">
+                                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                <button type="submit" class="badge-button {% if num.is_active %}badge-active{% else %}badge-inactive{% endif %}">
+                                    {{ 'Aktif' if num.is_active else 'Nonaktif' }}
+                                </button>
+                            </form>
+                        </td>
+                        <td>
+                            <form action="/admin/numbers/{{ num.id }}/delete" method="post" class="inline-form" onsubmit="return confirm('Apakah Anda yakin ingin menghapus nomor ini dari whitelist?');">
+                                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                <button type="submit" class="btn btn-danger btn-xs">Hapus</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center empty-state">Belum ada nomor dalam whitelist.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

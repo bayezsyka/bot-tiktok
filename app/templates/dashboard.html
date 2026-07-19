@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Farros TikTok Bot{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h1>Ikhtisar Sistem</h1>
+    <p class="subtitle">Real-time status pemrosesan media TikTok dan gateway WhatsApp</p>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon icon-active">📱</div>
+        <div class="stat-info">
+            <span class="stat-label">Nomor Whitelist Aktif</span>
+            <span class="stat-value">{{ active_numbers }}</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon icon-queue">⚡</div>
+        <div class="stat-info">
+            <span class="stat-label">Job Aktif / Antrean</span>
+            <span class="stat-value">{{ stats.active_jobs }}</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon icon-success">✅</div>
+        <div class="stat-info">
+            <span class="stat-label">Job Selesai</span>
+            <span class="stat-value">{{ stats.completed_jobs }}</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon icon-danger">❌</div>
+        <div class="stat-info">
+            <span class="stat-label">Job Gagal</span>
+            <span class="stat-value">{{ stats.failed_jobs }}</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon icon-disk">💾</div>
+        <div class="stat-info">
+            <span class="stat-label">Penggunaan Disk Temp</span>
+            <span class="stat-value">{{ (temp_disk_used_bytes / (1024 * 1024))|round(1) }} MB</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon icon-free">🗄️</div>
+        <div class="stat-info">
+            <span class="stat-label">Sisa Ruang Disk</span>
+            <span class="stat-value">{{ (disk_free_bytes / (1024 * 1024 * 1024))|round(2) }} GB</span>
+        </div>
+    </div>
+</div>
+
+<div class="card recent-section">
+    <div class="card-header">
+        <h2>10 Aktivitas Terbaru</h2>
+        <a href="/admin/history" class="btn btn-secondary btn-sm">Lihat Semua Riwayat</a>
+    </div>
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Waktu Masuk</th>
+                    <th>Nomor Pengirim</th>
+                    <th>Link TikTok</th>
+                    <th>Tipe</th>
+                    <th>Status</th>
+                    <th>Aksi</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for job in recent_jobs %}
+                <tr>
+                    <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td><span class="badge badge-phone">{{ job.sender_number }}</span></td>
+                    <td class="td-url"><a href="{{ job.original_url }}" target="_blank" rel="noopener noreferrer">{{ job.original_url[:45] }}{% if job.original_url|length > 45 %}...{% endif %}</a></td>
+                    <td><span class="badge badge-type">{{ job.content_type or '-' }}</span></td>
+                    <td>
+                        <span class="status-pill status-{{ job.status }}">{{ job.status }}</span>
+                    </td>
+                    <td>
+                        <a href="/admin/history/{{ job.id }}" class="btn btn-outline btn-xs">Detail</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="6" class="text-center empty-state">Belum ada aktivitas job yang tercatat.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
