@@ -2,6 +2,7 @@ from collections.abc import Sequence
 
 from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database.models import (
     Admin,
@@ -112,12 +113,22 @@ class JobRepository:
         self.session = session
 
     async def get_by_id(self, job_id: str) -> DownloadJob | None:
-        stmt = select(DownloadJob).where(DownloadJob.id == job_id)
+        stmt = (
+            select(DownloadJob)
+            .options(selectinload(DownloadJob.items))
+            .execution_options(populate_existing=True)
+            .where(DownloadJob.id == job_id)
+        )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def get_by_inbound_message_id(self, inbound_id: str) -> DownloadJob | None:
-        stmt = select(DownloadJob).where(DownloadJob.inbound_message_id == inbound_id)
+        stmt = (
+            select(DownloadJob)
+            .options(selectinload(DownloadJob.items))
+            .execution_options(populate_existing=True)
+            .where(DownloadJob.inbound_message_id == inbound_id)
+        )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -149,19 +160,33 @@ class JobRepository:
         )
         self.session.add(job)
         await self.session.flush()
+        await self.session.refresh(job, ["items"])
         return job
 
     async def get_next_queued_job(self) -> DownloadJob | None:
         # Lock with with_for_update if supported or select inside active transaction
-        stmt = select(DownloadJob).where(DownloadJob.status == "queued").order_by(DownloadJob.queued_at.asc(), DownloadJob.created_at.asc()).limit(1)
+        stmt = (
+            select(DownloadJob)
+            .options(selectinload(DownloadJob.items))
+            .execution_options(populate_existing=True)
+            .where(DownloadJob.status == "queued")
+            .order_by(DownloadJob.queued_at.asc(), DownloadJob.created_at.asc())
+            .limit(1)
+        )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
     async def get_incomplete_jobs(self) -> Sequence[DownloadJob]:
         active_statuses = ("extracting", "downloading", "processing", "sending")
-        stmt = select(DownloadJob).where(DownloadJob.status.in_(active_statuses))
+        stmt = (
+            select(DownloadJob)
+            .options(selectinload(DownloadJob.items))
+            .execution_options(populate_existing=True)
+            .where(DownloadJob.status.in_(active_statuses))
+        )
         result = await self.session.execute(stmt)
         return result.scalars().all()
+
 
     async def get_dashboard_stats(self) -> dict[str, int]:
         total_stmt = select(func.count()).select_from(DownloadJob)
@@ -184,7 +209,7 @@ class JobRepository:
         }
 
     async def list_recent_jobs(self, limit: int = 10) -> Sequence[DownloadJob]:
-        stmt = select(DownloadJob).order_by(desc(DownloadJob.created_at)).limit(limit)
+        stmt = select(DownloadJob).options(selectinload(DownloadJob.items)).order_by(desc(DownloadJob.created_at)).limit(limit)
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
@@ -197,7 +222,8 @@ class JobRepository:
         offset: int = 0,
         limit: int = 20,
     ) -> tuple[Sequence[DownloadJob], int]:
-        stmt = select(DownloadJob)
+        stmt = select(DownloadJob).options(selectinload(DownloadJob.items))
+
         count_stmt = select(func.count()).select_from(DownloadJob)
 
         conditions = []

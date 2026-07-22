@@ -119,7 +119,7 @@ class QueueWorker:
                     provider, metadata = await downloader.extract_and_prepare_job(job, job_dir)
                     await session.commit()
                 except (ContentNotSupportedError, DownloadSizeLimitExceededError) as e:
-                    logger.warning(f"Permanent error during extraction for job {job_id}: {e.message}")
+                    logger.warning(f"[Stage: Extraction] Permanent error during extraction for job {job_id}: {e.message}")
                     await queue_service.update_job_status(
                         job_id, "failed", error_code="UNSUPPORTED_CONTENT", error_message=e.user_friendly_message
                     )
@@ -127,7 +127,7 @@ class QueueWorker:
                     await self._send_failure_notification(job.sender_number, job.inbound_message_id)
                     return
                 except (DownloadTimeoutError, DownloadError, Exception) as e:
-                    logger.error(f"Extraction error on job {job_id}: {e}")
+                    logger.error(f"[Stage: Extraction] Extraction error on job {job_id}: {e}")
                     await self._handle_job_error(job, str(e), session)
                     return
 
@@ -135,7 +135,7 @@ class QueueWorker:
                 await queue_service.update_job_status(job_id, "downloading")
                 await session.commit()
 
-                # refresh job inside new tx
+                # refresh job inside new tx right before download_job_content
                 job = await job_repo.get_by_id(job_id)
                 if not job:
                     return
@@ -143,6 +143,7 @@ class QueueWorker:
                     await downloader.download_job_content(job, provider, metadata, job_dir)
                     await session.commit()
                 except (ContentNotSupportedError, DownloadSizeLimitExceededError) as e:
+                    logger.warning(f"[Stage: Download] Size exceeded on job {job_id}: {e.message}")
                     await queue_service.update_job_status(
                         job_id, "failed", error_code="SIZE_EXCEEDED", error_message=e.user_friendly_message
                     )
@@ -150,14 +151,44 @@ class QueueWorker:
                     await self._send_failure_notification(job.sender_number, job.inbound_message_id)
                     return
                 except Exception as e:
-                    logger.error(f"Download error on job {job_id}: {e}")
+                    logger.error(f"[Stage: Download] Download error on job {job_id}: {e}")
                     await self._handle_job_error(job, str(e), session)
+                    return
+
+                # Refresh job right before pre-processing validation
+                job = await job_repo.get_by_id(job_id)
+                if not job:
+                    return
+
+                # VALIDATE FILES BEFORE PROCESSING
+                items = list(job.items) if job.items else []
+                if not items or (job.media_count and len(items) != job.media_count):
+                    logger.error(f"[Stage: Download] Job {job_id} item count mismatch before processing. Items: {len(items)}, expected: {job.media_count}")
+                    await queue_service.update_job_status(
+                        job_id, "failed", error_code="INTERNAL_STATE_ERROR", error_message="Jumlah item unduhan tidak sesuai dengan metadata."
+                    )
+                    await session.commit()
+                    await self._send_failure_notification(job.sender_number, job.inbound_message_id)
+                    return
+
+                invalid_items = [
+                    item for item in items
+                    if item.status != "sent" and not item.gateway_message_id and (not item.local_filename or not os.path.exists(item.local_filename))
+                ]
+                if invalid_items:
+                    logger.error(f"[Stage: Download] Job {job_id} has items without valid local_filename before processing.")
+                    await queue_service.update_job_status(
+                        job_id, "failed", error_code="DOWNLOAD_FAILED", error_message="File media lokal tidak ditemukan atau rusak."
+                    )
+                    await session.commit()
+                    await self._send_failure_notification(job.sender_number, job.inbound_message_id)
                     return
 
                 # STEP 3: Processing media
                 await queue_service.update_job_status(job_id, "processing")
                 await session.commit()
 
+                # Refresh job right before MediaProcessor.process_job_media
                 job = await job_repo.get_by_id(job_id)
                 if not job:
                     return
@@ -165,7 +196,7 @@ class QueueWorker:
                     await media_processor.process_job_media(job, job_dir)
                     await session.commit()
                 except Exception as e:
-                    logger.error(f"Processing error on job {job_id}: {e}")
+                    logger.error(f"[Stage: Processing] Processing error on job {job_id}: {e}")
                     await self._handle_job_error(job, str(e), session)
                     return
 
@@ -173,6 +204,7 @@ class QueueWorker:
                 await queue_service.update_job_status(job_id, "sending")
                 await session.commit()
 
+                # Refresh job right before _send_all_media_items
                 job = await job_repo.get_by_id(job_id)
                 if not job:
                     return
@@ -186,8 +218,18 @@ class QueueWorker:
     async def _send_all_media_items(
         self, job: DownloadJob, session: AsyncSession, queue_service: QueueService
     ) -> None:
-        items = list(job.items)
+        items = list(job.items) if job.items else []
         total_items = len(items)
+
+        if total_items == 0:
+            logger.error(f"[Stage: Sending] Job {job.id} has total_items == 0.")
+            await queue_service.update_job_status(
+                job.id, "failed", error_code="NO_MEDIA_ITEMS", error_message="Tidak ada item media untuk dikirim."
+            )
+            await self._send_failure_notification(job.sender_number, job.inbound_message_id)
+            await session.commit()
+            return
+
         sent_count = 0
         failed_count = 0
 
@@ -197,8 +239,15 @@ class QueueWorker:
                 sent_count += 1
                 continue
 
+            if not item.local_filename or not os.path.exists(item.local_filename):
+                logger.error(f"[Stage: Sending] Item {item.id} of job {job.id} missing local_filename.")
+                await queue_service.update_item_status(
+                    item.id, status="failed", error_message="File media lokal tidak ditemukan atau rusak."
+                )
+                failed_count += 1
+                continue
 
-            if item.status == "failed" or not item.local_filename or not os.path.exists(item.local_filename):
+            if item.status == "failed":
                 failed_count += 1
                 continue
 
@@ -229,6 +278,7 @@ class QueueWorker:
                 await session.commit()
             except GatewayResponseError as e:
                 # 4xx or permanent gateway response
+                logger.error(f"[Stage: Sending] GatewayResponseError sending item {item.id} for job {job.id}: status={e.status_code}, message={e.message}")
                 await queue_service.update_item_status(
                     item.id, status="failed", error_message=f"Gateway error: {e.message}"
                 )
@@ -236,7 +286,7 @@ class QueueWorker:
                 await session.commit()
             except GatewayError as e:
                 # Network or timeout error when sending item
-                logger.warning(f"Network error sending item {item.id} for job {job.id}: {e}")
+                logger.warning(f"[Stage: Sending] Network error sending item {item.id} for job {job.id}: {e}")
                 await queue_service.update_item_status(item.id, status="failed", error_message=str(e))
                 failed_count += 1
                 await session.commit()
@@ -261,6 +311,7 @@ class QueueWorker:
             await self._send_failure_notification(job.sender_number, job.inbound_message_id)
 
         await session.commit()
+
 
     async def _handle_job_error(self, job: DownloadJob, error_msg: str, session: AsyncSession) -> None:
         queue_service = QueueService(session)

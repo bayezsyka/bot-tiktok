@@ -75,6 +75,7 @@ class DownloaderService:
                     status="pending",
                     source_url=item_meta.source_url,
                 )
+                job.items.append(item)
                 self.session.add(item)
 
         await self.session.flush()
@@ -88,7 +89,8 @@ class DownloaderService:
         job_dir: Path,
     ) -> None:
         """Download physical files for the job using the selected provider and update local items."""
-        if job.items and all(item.status == "sent" or item.gateway_message_id for item in job.items):
+        items = list(job.items) if job.items else []
+        if items and all(item.status == "sent" or item.gateway_message_id for item in items):
             return
 
         canonical_url = job.canonical_url or job.original_url
@@ -96,15 +98,46 @@ class DownloaderService:
         updated_metadata = await provider.download_content(canonical_url, metadata, job_dir)
 
         total_source_size = 0
-        items_dict = {item.position: item for item in job.items}
+        items_dict = {item.position: item for item in (job.items or [])}
 
         for item_meta in updated_metadata.items:
             db_item = items_dict.get(item_meta.position)
-            if db_item and item_meta.local_path and os.path.exists(item_meta.local_path):
+            if not db_item:
+                db_item = DownloadItem(
+                    job_id=job.id,
+                    position=item_meta.position,
+                    media_type=item_meta.media_type,
+                    status="pending",
+                    source_url=item_meta.source_url,
+                )
+                job.items.append(db_item)
+                self.session.add(db_item)
+                items_dict[item_meta.position] = db_item
+
+
+            if db_item.status == "sent" or db_item.gateway_message_id:
+                total_source_size += (db_item.source_size_bytes or 0)
+                continue
+
+            if item_meta.local_path and os.path.exists(item_meta.local_path):
                 size = os.path.getsize(item_meta.local_path)
-                db_item.local_filename = item_meta.local_path
+                db_item.local_filename = str(item_meta.local_path)
                 db_item.source_size_bytes = size
                 total_source_size += size
+            else:
+                raise DownloadError(
+                    f"File fisik hasil download untuk posisi {item_meta.position} tidak ditemukan di disk.",
+                    user_friendly_message="Gagal mengunduh file media dari TikTok. File tidak ditemukan."
+                )
+
+        # Verify no non-sent item is left without a local_filename
+        for item in (job.items or []):
+            if item.status != "sent" and not item.gateway_message_id:
+                if not item.local_filename or not os.path.exists(item.local_filename):
+                    raise DownloadError(
+                        f"Item posisi {item.position} tidak memiliki file hasil unduhan lokal.",
+                        user_friendly_message="Gagal mengunduh seluruh file media dari TikTok."
+                    )
 
         job.source_size_bytes = total_source_size
         await self.session.flush()
