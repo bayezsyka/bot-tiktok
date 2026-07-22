@@ -11,7 +11,7 @@ from app.database.connection import get_db
 from app.database.repositories import AllowedNumberRepository, JobRepository, WebhookEventRepository
 from app.gateway.client import FarrosWAGatewayClient
 from app.security.rate_limit import check_webhook_rate_limit
-from app.security.urls import extract_tiktok_url, normalize_phone_number
+from app.security.urls import extract_tiktok_url, normalize_phone_number, resolve_lid_to_phone
 from app.webhooks.parser import parse_inbound_message
 from app.webhooks.schemas import WebhookEventResponse
 from app.webhooks.signature import validate_webhook_headers_and_signature
@@ -76,17 +76,26 @@ async def handle_farros_wa_webhook(
     if parsed.is_group or parsed.from_me:
         return WebhookEventResponse(status="ok", message="Ignored group/self message")
 
-    # Ignore LID without sender_phone
+    # 5. Resolve LID or normalize phone number
+    norm_phone = None
     if parsed.is_lid or "@lid" in parsed.sender_number:
-        logger.warning(
-            f"Received webhook payload with only LID sender and no routable phone number for inbound_id: {parsed.inbound_message_id}"
-        )
-        return WebhookEventResponse(status="ok", message="Ignored LID sender without routable phone number")
+        lid_to_lookup = parsed.lid_number
+        if not lid_to_lookup:
+            lid_to_lookup = parsed.sender_number.split("@")[0].strip() if parsed.sender_number else ""
+            lid_to_lookup = "".join(ch for ch in lid_to_lookup if ch.isdigit())
 
-    # 5. Normalize phone number & check whitelist
-    norm_phone = normalize_phone_number(parsed.sender_number)
-    if not norm_phone:
-        return WebhookEventResponse(status="ok", message="Invalid sender phone format")
+        mapped_phone = resolve_lid_to_phone(lid_to_lookup) if lid_to_lookup else None
+        if not mapped_phone:
+            logger.warning(
+                f"Received webhook payload with unmapped LID sender for inbound_id: {parsed.inbound_message_id}"
+            )
+            return WebhookEventResponse(status="ok", message="Ignored LID sender without routable phone number")
+        norm_phone = mapped_phone
+    else:
+        norm_phone = normalize_phone_number(parsed.sender_number)
+        if not norm_phone:
+            return WebhookEventResponse(status="ok", message="Invalid sender phone format")
+
 
     number_repo = AllowedNumberRepository(db)
     allowed_number = await number_repo.get_by_phone(norm_phone)

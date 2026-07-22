@@ -51,8 +51,63 @@ def normalize_phone_number(raw_number: str) -> str | None:
     return None
 
 
+def parse_lid_mapping(mapping_str: str | None = None) -> dict[str, str]:
+    """
+    Parse FARROS_WA_LID_MAP environment string into a dictionary of {LID: 628...}.
+    Format: FARROS_WA_LID_MAP=84306181542117:628xxxxxxxxxx,12345678901234:628yyyyyyyyyy
+    - Separates pairs using comma
+    - Separates LID and number using colon
+    - Only accepts digits for LID
+    - Only accepts destination numbers formatted starting with 62 and length 10-15 digits
+    - Ignores invalid entries safely
+    - Does NOT log mapping
+    """
+    if mapping_str is None:
+        from app.config import get_settings
+        mapping_str = get_settings().FARROS_WA_LID_MAP
+
+    result: dict[str, str] = {}
+    if not mapping_str or not isinstance(mapping_str, str):
+        return result
+
+    pairs = mapping_str.split(",")
+    for pair in pairs:
+        pair = pair.strip()
+        if not pair or ":" not in pair:
+            continue
+        parts = pair.split(":")
+        if len(parts) != 2:
+            continue
+        lid_part = parts[0].strip()
+        num_part = parts[1].strip()
+
+        # Only accept digits for LID
+        if not lid_part or not lid_part.isdigit():
+            continue
+
+        # Only accept destination number format 62 and length 10-15 digits
+        if not num_part or not num_part.isdigit() or not num_part.startswith("62") or not (10 <= len(num_part) <= 15):
+            continue
+
+        result[lid_part] = num_part
+
+    return result
+
+
+def resolve_lid_to_phone(lid: str, mapping_str: str | None = None) -> str | None:
+    """Resolve an LID string to its mapped 628... phone number using FARROS_WA_LID_MAP."""
+    if not lid:
+        return None
+    digits_lid = re.sub(r"\D", "", str(lid))
+    if not digits_lid:
+        return None
+    mapping = parse_lid_mapping(mapping_str)
+    return mapping.get(digits_lid)
+
+
 
 def is_safe_hostname(hostname: str) -> bool:
+
     """Check hostname against SSRF targets (private IPs, localhost, cloud metadata endpoints)."""
     if not hostname:
         return False

@@ -10,8 +10,10 @@ class ParsedInboundMessage(BaseModel):
     is_group: bool = False
     from_me: bool = False
     is_lid: bool = False
+    lid_number: str | None = None
 
 
 class WebhookEventResponse(BaseModel):
+
     status: str = "ok"
     message: str | None = None

@@ -20,7 +20,6 @@ from app.security.urls import normalize_phone_number
 from sqlalchemy import text
 
 
-
 async def init_db_cmd(args: argparse.Namespace) -> None:
     print("Initializing database & running migrations...")
     await run_migrations()

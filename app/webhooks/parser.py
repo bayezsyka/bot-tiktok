@@ -39,35 +39,64 @@ def parse_inbound_message(payload: dict[str, Any]) -> ParsedInboundMessage | Non
     ]
     sender_phone = next((str(s).strip() for s in sender_phone_candidates if s and str(s).strip()), "")
 
-    # Check if sender_phone is a valid non-LID
-    sender = ""
-    is_lid = False
+    remote_jid = str(msg.get("remote_jid") or data.get("remote_jid") or "").strip()
+    from_jid = str(msg.get("from") or data.get("from") or "").strip()
 
-    if sender_phone and "@lid" not in sender_phone and not sender_phone.endswith("@lid"):
+    is_lid = False
+    lid_number = None
+
+    if "@lid" in remote_jid or remote_jid.lower().endswith("lid"):
+        is_lid = True
+        lid_candidate = remote_jid.split("@")[0].strip()
+        if lid_candidate.isdigit():
+            lid_number = lid_candidate
+    elif "@lid" in from_jid or from_jid.lower().endswith("lid"):
+        is_lid = True
+        lid_candidate = from_jid.split("@")[0].strip()
+        if lid_candidate.isdigit():
+            lid_number = lid_candidate
+    elif "@lid" in sender_phone or sender_phone.lower().endswith("lid"):
+        is_lid = True
+        lid_candidate = sender_phone.split("@")[0].strip()
+        if lid_candidate.isdigit():
+            lid_number = lid_candidate
+
+    sender = ""
+    if sender_phone and not ("@lid" in sender_phone or sender_phone.lower().endswith("lid")):
         sender = sender_phone
     else:
         fallback_candidates = [
+            sender_phone,
             msg.get("from"),
             data.get("from"),
             msg.get("remote_jid"),
             data.get("remote_jid"),
             msg.get("sender"),
             data.get("sender"),
-            sender_phone,
         ]
         sender = next((str(s).strip() for s in fallback_candidates if s and str(s).strip()), "")
 
     if not sender:
         return None
 
-    # If formatted as JID (e.g. 628123456789@s.whatsapp.net), strip suffix safely
     if "@s.whatsapp.net" in sender:
         sender = sender.split("@s.whatsapp.net")[0]
     elif "@" in sender and not sender.endswith("@lid") and not sender.endswith("@g.us"):
         sender = sender.split("@")[0]
 
-    if "@lid" in sender or sender.endswith("@lid"):
+    if "@lid" in sender or sender.lower().endswith("lid"):
         is_lid = True
+        lid_candidate = sender.split("@")[0].strip()
+        if lid_candidate.isdigit():
+            lid_number = lid_candidate
+    elif is_lid and not lid_number:
+        lid_candidate = sender.split("@")[0].strip()
+        if lid_candidate.isdigit():
+            lid_number = lid_candidate
+
+    if is_lid and "@" in sender:
+        sender = sender.split("@")[0].strip()
+
 
     # message_text
     text = str(
@@ -145,4 +174,5 @@ def parse_inbound_message(payload: dict[str, Any]) -> ParsedInboundMessage | Non
         is_group=is_group,
         from_me=from_me,
         is_lid=is_lid,
+        lid_number=lid_number,
     )

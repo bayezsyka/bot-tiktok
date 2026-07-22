@@ -24,8 +24,10 @@ class Settings(BaseSettings):
     FARROS_WA_WEBHOOK_SECRET: str = ""
     FARROS_WA_SESSION_ID: str = ""
     FARROS_WA_TIMEOUT: int = 30
+    FARROS_WA_LID_MAP: str = ""
 
     YT_DLP_BINARY: str = "yt-dlp"
+
     FFMPEG_BINARY: str = "ffmpeg"
     FFPROBE_BINARY: str = "ffprobe"
     TIKTOK_COOKIES_FILE: str = ""
