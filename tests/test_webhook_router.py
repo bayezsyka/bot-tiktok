@@ -77,10 +77,7 @@ async def test_webhook_queue_job_success(client: AsyncClient, test_db: AsyncSess
     tiktok_url = "https://www.tiktok.com/@creator/video/1234567890123456789"
     body = json.dumps({"data": {"message": {"id": "msg-valid-01", "from": "628111222333", "text": f"Tolong download {tiktok_url}"}}}).encode("utf-8")
 
-    with patch("app.webhooks.router.resolve_canonical_tiktok_url", new_callable=AsyncMock) as mock_resolve, \
-         patch("app.webhooks.router._send_initial_reply_background", new_callable=AsyncMock):
-        mock_resolve.return_value = tiktok_url
-
+    with patch("app.webhooks.router._send_initial_reply_background", new_callable=AsyncMock):
         resp = await client.post("/webhooks/farros-wa", content=body, headers=_make_signed_headers(body, event_id="evt-valid-01"))
         assert resp.status_code == 200
         assert resp.json().get("message") == "Job queued successfully"
@@ -91,16 +88,57 @@ async def test_webhook_queue_job_success(client: AsyncClient, test_db: AsyncSess
     assert job is not None
     assert job.status == "queued"
     assert job.sender_number == "628111222333"
+    assert job.canonical_url is None
 
 
 @pytest.mark.asyncio
-async def test_webhook_duplicate_event_id(client: AsyncClient) -> None:
+async def test_webhook_duplicate_event_id(client: AsyncClient, test_db: AsyncSession) -> None:
+    num_repo = AllowedNumberRepository(test_db)
+    await num_repo.create_number(name="Test User", phone_number="628111222333")
+    await test_db.commit()
+
     body = json.dumps({"data": {"message": {"id": "msg-dup", "from": "628111222333", "text": "https://www.tiktok.com/@a/video/1"}}}).encode("utf-8")
     headers = _make_signed_headers(body, event_id="evt-dup-check")
 
-    resp1 = await client.post("/webhooks/farros-wa", content=body, headers=headers)
-    assert resp1.status_code == 200
+    with patch("app.webhooks.router._send_initial_reply_background", new_callable=AsyncMock):
+        resp1 = await client.post("/webhooks/farros-wa", content=body, headers=headers)
+        assert resp1.status_code == 200
 
-    resp2 = await client.post("/webhooks/farros-wa", content=body, headers=headers)
-    assert resp2.status_code == 200
-    assert resp2.json().get("message") == "Duplicate event ignored"
+        resp2 = await client.post("/webhooks/farros-wa", content=body, headers=headers)
+        assert resp2.status_code == 200
+        assert resp2.json().get("message") == "Duplicate event ignored"
+
+
+@pytest.mark.asyncio
+async def test_webhook_ignore_lid_sender(client: AsyncClient, test_db: AsyncSession) -> None:
+    body = json.dumps({"data": {"message": {"id": "msg-lid-01", "from": "84306181542117@lid", "text": "https://www.tiktok.com/@a/video/1"}}}).encode("utf-8")
+    with patch("app.webhooks.router._send_initial_reply_background", new_callable=AsyncMock) as mock_reply:
+        resp = await client.post("/webhooks/farros-wa", content=body, headers=_make_signed_headers(body, event_id="evt-lid-01"))
+        assert resp.status_code == 200
+        assert resp.json().get("message") == "Ignored LID sender without routable phone number"
+        mock_reply.assert_not_called()
+
+    job_repo = JobRepository(test_db)
+    job = await job_repo.get_by_inbound_message_id("msg-lid-01")
+    assert job is None
+
+
+@pytest.mark.asyncio
+async def test_webhook_duplicate_event_different_payload(client: AsyncClient, test_db: AsyncSession) -> None:
+    num_repo = AllowedNumberRepository(test_db)
+    await num_repo.create_number(name="Test User", phone_number="628111222333")
+    await test_db.commit()
+
+    body1 = json.dumps({"data": {"message": {"id": "msg-dup-1", "from": "628111222333", "text": "https://www.tiktok.com/@a/video/1"}}}).encode("utf-8")
+    headers1 = _make_signed_headers(body1, event_id="evt-dup-diff")
+    with patch("app.webhooks.router._send_initial_reply_background", new_callable=AsyncMock):
+        resp1 = await client.post("/webhooks/farros-wa", content=body1, headers=headers1)
+        assert resp1.status_code == 200
+
+        body2 = json.dumps({"data": {"message": {"id": "msg-dup-2", "from": "628111222333", "text": "https://www.tiktok.com/@a/video/2"}}}).encode("utf-8")
+        headers2 = _make_signed_headers(body2, event_id="evt-dup-diff")
+        resp2 = await client.post("/webhooks/farros-wa", content=body2, headers=headers2)
+        assert resp2.status_code == 409
+        assert "Duplicate event ID with different payload" in resp2.json().get("detail", "")
+
+

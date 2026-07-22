@@ -25,6 +25,9 @@ def normalize_phone_number(raw_number: str) -> str | None:
     if not raw_number:
         return None
 
+    if "@lid" in str(raw_number).lower() or str(raw_number).lower().endswith("lid"):
+        return None
+
     # Strip all non-digit characters
     digits = re.sub(r"\D", "", str(raw_number))
 
@@ -46,6 +49,7 @@ def normalize_phone_number(raw_number: str) -> str | None:
         return digits
 
     return None
+
 
 
 def is_safe_hostname(hostname: str) -> bool:

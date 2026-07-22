@@ -9,6 +9,7 @@ class ParsedInboundMessage(BaseModel):
     timestamp: int = 0
     is_group: bool = False
     from_me: bool = False
+    is_lid: bool = False
 
 
 class WebhookEventResponse(BaseModel):

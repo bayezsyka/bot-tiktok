@@ -20,7 +20,9 @@ os.environ["DATABASE_PATH"] = _test_db_path
 
 from app.database.connection import get_db, get_session_maker
 from app.database.migrations import run_migrations
+from app.database.models import Admin, AllowedNumber, DownloadItem, DownloadJob, WebhookEvent
 from app.main import app
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -42,7 +44,12 @@ async def test_db() -> AsyncGenerator[AsyncSession, None]:
     await run_migrations()
     session_maker = get_session_maker()
     async with session_maker() as session:
+        for model in [DownloadItem, DownloadJob, WebhookEvent, AllowedNumber, Admin]:
+            await session.execute(delete(model))
+        await session.commit()
         yield session
+
+
 
 
 @pytest_asyncio.fixture

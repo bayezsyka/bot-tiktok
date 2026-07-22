@@ -17,6 +17,8 @@ from app.database.repositories import AdminRepository, AllowedNumberRepository, 
 from app.gateway.client import FarrosWAGatewayClient
 from app.media.cleanup import check_disk_space, cleanup_expired_temp_files
 from app.security.urls import normalize_phone_number
+from sqlalchemy import text
+
 
 
 async def init_db_cmd(args: argparse.Namespace) -> None:
@@ -144,8 +146,9 @@ async def check_health_cmd(args: argparse.Namespace) -> None:
     # 1. Check DB
     try:
         async with AsyncSessionLocal() as session:
-            await session.execute("SELECT 1")
+            await session.execute(text("SELECT 1"))
         print("  [OK] Database connection (SQLite WAL mode)")
+
     except Exception as e:
         print(f"  [FAIL] Database check failed: {e}")
         all_ok = False

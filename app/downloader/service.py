@@ -10,6 +10,7 @@ from app.downloader.exceptions import DownloadError
 from app.downloader.providers import DownloaderProvider
 from app.downloader.tiktok_photo_provider import TikTokPhotoProvider
 from app.downloader.yt_dlp_provider import YtDlpProvider
+from app.security.urls import resolve_canonical_tiktok_url
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,16 @@ class DownloaderService:
         Detect content type using providers, extract metadata, and populate DownloadItem records in DB.
         Returns (selected_provider, metadata).
         """
-        canonical_url = job.canonical_url or job.original_url
+        if not job.canonical_url:
+            canonical_url = await resolve_canonical_tiktok_url(job.original_url)
+            if not canonical_url:
+                raise DownloadError(
+                    "Link TikTok tidak valid atau tidak aman.",
+                    user_friendly_message="Link TikTok tidak valid, berisiko, atau tidak dapat diakses.",
+                )
+            job.canonical_url = canonical_url
+        else:
+            canonical_url = job.canonical_url
 
         # Try yt-dlp first for video
         metadata = await self.yt_dlp.extract_metadata(canonical_url, job_dir)
@@ -49,16 +59,23 @@ class DownloaderService:
         job.media_count = len(metadata.items)
         job.duration_seconds = metadata.duration_seconds
 
-        # Create DownloadItem records
+        # Create or update DownloadItem records (avoid duplicate when retrying/recovering)
+        existing_items = {item.position: item for item in job.items}
         for item_meta in metadata.items:
-            item = DownloadItem(
-                job_id=job.id,
-                position=item_meta.position,
-                media_type=item_meta.media_type,
-                status="pending",
-                source_url=item_meta.source_url,
-            )
-            self.session.add(item)
+            db_item = existing_items.get(item_meta.position)
+            if db_item:
+                if db_item.status != "sent" and not db_item.gateway_message_id:
+                    db_item.media_type = item_meta.media_type
+                    db_item.source_url = item_meta.source_url
+            else:
+                item = DownloadItem(
+                    job_id=job.id,
+                    position=item_meta.position,
+                    media_type=item_meta.media_type,
+                    status="pending",
+                    source_url=item_meta.source_url,
+                )
+                self.session.add(item)
 
         await self.session.flush()
         return provider, metadata
@@ -71,6 +88,9 @@ class DownloaderService:
         job_dir: Path,
     ) -> None:
         """Download physical files for the job using the selected provider and update local items."""
+        if job.items and all(item.status == "sent" or item.gateway_message_id for item in job.items):
+            return
+
         canonical_url = job.canonical_url or job.original_url
 
         updated_metadata = await provider.download_content(canonical_url, metadata, job_dir)

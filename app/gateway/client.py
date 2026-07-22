@@ -1,15 +1,23 @@
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from app.config import get_settings
-from app.gateway.exceptions import GatewayNetworkError, GatewayResponseError, GatewayTimeoutError
+from app.gateway.exceptions import (
+    GatewayError,
+    GatewayNetworkError,
+    GatewayResponseError,
+    GatewayTimeoutError,
+)
 from app.gateway.schemas import GatewayMessageResponse
 
 logger = logging.getLogger(__name__)
+
+IDEMPOTENCY_KEY_REGEX = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 
 
 class FarrosWAGatewayClient:
@@ -18,15 +26,18 @@ class FarrosWAGatewayClient:
         self.base_url = self.settings.FARROS_WA_BASE_URL.rstrip("/")
         self.api_key = self.settings.FARROS_WA_API_KEY
         self.session_id = self.settings.FARROS_WA_SESSION_ID
-        self.timeout = httpx.Timeout(30.0, connect=10.0)
+        timeout_sec = float(getattr(self.settings, "FARROS_WA_TIMEOUT", 30))
+        self.timeout = httpx.Timeout(timeout_sec, connect=min(10.0, timeout_sec))
 
     def _get_headers(self, idempotency_key: str | None = None) -> dict[str, str]:
+        if not idempotency_key or not IDEMPOTENCY_KEY_REGEX.match(idempotency_key):
+            raise GatewayError("Valid Idempotency-Key matching ^[A-Za-z0-9._:-]{8,128}$ is required for all outbound requests")
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Accept": "application/json",
+            "Idempotency-Key": str(idempotency_key),
         }
-        if idempotency_key:
-            headers["Idempotency-Key"] = str(idempotency_key)
         return headers
 
     async def _execute_request(
@@ -36,7 +47,7 @@ class FarrosWAGatewayClient:
         idempotency_key: str | None = None,
         json_data: dict[str, Any] | None = None,
         data: dict[str, Any] | None = None,
-        files: dict[str, Any] | None = None,
+        file_info: tuple[Path, str] | None = None,
         max_retries: int = 3,
     ) -> GatewayMessageResponse:
         url = f"{self.base_url}{endpoint}"
@@ -48,23 +59,33 @@ class FarrosWAGatewayClient:
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     if method.upper() == "POST":
-                        response = await client.post(
-                            url, headers=headers, json=json_data, data=data, files=files
-                        )
+                        if file_info:
+                            path, mime_type = file_info
+                            # Open file fresh on every attempt so stream is at 0 position
+                            with open(path, "rb") as f:
+                                files = {"file": (path.name, f, mime_type)}
+                                response = await client.post(
+                                    url, headers=headers, json=json_data, data=data, files=files
+                                )
+                        else:
+                            response = await client.post(
+                                url, headers=headers, json=json_data, data=data
+                            )
                     else:
                         response = await client.request(
                             method, url, headers=headers, json=json_data, data=data
                         )
 
-                    # Check for 4xx permanent errors
+                    # Check for permanent 4xx errors (do not retry 400, 401, 403, 404, 409, 410, 413, 422, etc.)
                     if 400 <= response.status_code < 500:
-                        raise GatewayResponseError(
-                            status_code=response.status_code,
-                            message=response.text[:200],
-                        )
+                        if response.status_code not in (408, 425, 429):
+                            raise GatewayResponseError(
+                                status_code=response.status_code,
+                                message=response.text[:200],
+                            )
 
-                    # Check for 5xx transient server errors
-                    if response.status_code >= 500:
+                    # Check for retryable HTTP errors (408, 425, 429, 5xx)
+                    if response.status_code in (408, 425, 429) or response.status_code >= 500:
                         if attempt >= max_retries:
                             raise GatewayResponseError(
                                 status_code=response.status_code,
@@ -78,7 +99,12 @@ class FarrosWAGatewayClient:
                     try:
                         res_json = response.json()
                         if isinstance(res_json, dict):
-                            msg_id = res_json.get("message_id") or res_json.get("data", {}).get("id") or res_json.get("id")
+                            data_dict = res_json.get("data")
+                            msg_id = None
+                            if isinstance(data_dict, dict):
+                                msg_id = data_dict.get("id") or data_dict.get("message_id")
+                            if not msg_id:
+                                msg_id = res_json.get("id") or res_json.get("message_id")
                             return GatewayMessageResponse(status="ok", message_id=str(msg_id) if msg_id else None, data=res_json)
                         return GatewayMessageResponse(status="ok")
                     except Exception:
@@ -136,6 +162,7 @@ class FarrosWAGatewayClient:
         data: dict[str, Any] = {
             "type": str(media_type),
             "to": str(to),
+            "filename": path.name,
             "caption": str(caption),
             "external_reference": str(external_reference),
         }
@@ -149,12 +176,10 @@ class FarrosWAGatewayClient:
         elif path.suffix.lower() == ".webp":
             mime_type = "image/webp"
 
-        with open(path, "rb") as f:
-            files = {"file": (path.name, f, mime_type)}
-            return await self._execute_request(
-                method="POST",
-                endpoint="/api/v1/messages/upload",
-                idempotency_key=idempotency_key,
-                data=data,
-                files=files,
-            )
+        return await self._execute_request(
+            method="POST",
+            endpoint="/api/v1/messages/upload",
+            idempotency_key=idempotency_key,
+            data=data,
+            file_info=(path, mime_type),
+        )

@@ -95,7 +95,7 @@ class QueueWorker:
                 to=sender_number,
                 text=fail_msg,
                 external_reference=f"tiktok-{inbound_id}-fail",
-                idempotency_key=f"tiktok-{inbound_id}-fail-msg",
+                idempotency_key=f"tiktok-{inbound_id}-failure",
             )
         except Exception as e:
             logger.error(f"Could not send failure notification to {sender_number}: {e}")
@@ -193,9 +193,10 @@ class QueueWorker:
 
         for item in items:
             # Skip items already successfully sent
-            if item.status == "sent":
+            if item.status == "sent" or item.gateway_message_id:
                 sent_count += 1
                 continue
+
 
             if item.status == "failed" or not item.local_filename or not os.path.exists(item.local_filename):
                 failed_count += 1

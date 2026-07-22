@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     FARROS_WA_API_KEY: str = ""
     FARROS_WA_WEBHOOK_SECRET: str = ""
     FARROS_WA_SESSION_ID: str = ""
+    FARROS_WA_TIMEOUT: int = 30
 
     YT_DLP_BINARY: str = "yt-dlp"
     FFMPEG_BINARY: str = "ffmpeg"

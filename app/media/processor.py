@@ -31,6 +31,11 @@ class MediaProcessor:
         total_final_size = 0
 
         for item in job.items:
+            if item.status == "sent" or item.gateway_message_id:
+                if item.local_filename and os.path.exists(item.local_filename):
+                    total_final_size += os.path.getsize(item.local_filename)
+                continue
+
             if not item.local_filename or not os.path.exists(item.local_filename):
                 item.status = "failed"
                 item.error_message = "File fisik hasil download tidak ditemukan"

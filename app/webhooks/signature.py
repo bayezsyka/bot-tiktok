@@ -1,11 +1,39 @@
 import hashlib
 import hmac
+import json
 import time
 from collections.abc import Mapping
 
 from fastapi import HTTPException, status
 
 from app.config import get_settings
+
+
+def get_event_id(headers: Mapping[str, str], raw_body: bytes) -> str | None:
+    """
+    Extract event ID from:
+    1. X-FWAG-Event-Id header
+    2. Payload top-level 'id'
+    3. X-FWAG-Delivery header as fallback
+    """
+    event_id = headers.get("x-fwag-event-id") or headers.get("X-FWAG-Event-Id")
+    if event_id:
+        return str(event_id).strip()
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8", errors="replace"))
+        if isinstance(payload, dict):
+            payload_id = payload.get("id")
+            if payload_id:
+                return str(payload_id).strip()
+    except Exception:
+        pass
+
+    delivery = headers.get("x-fwag-delivery") or headers.get("X-FWAG-Delivery")
+    if delivery:
+        return str(delivery).strip()
+
+    return None
 
 
 def verify_webhook_signature(
@@ -18,8 +46,11 @@ def verify_webhook_signature(
     Verify X-FWAG headers and HMAC-SHA256 signature using constant-time comparison.
     Signature formula: HMAC-SHA256(secret, timestamp + "." + raw_body)
     """
+    if not secret:
+        return False
+
     event_hdr = headers.get("x-fwag-event") or headers.get("X-FWAG-Event")
-    event_id = headers.get("x-fwag-event-id") or headers.get("X-FWAG-Event-Id")
+    event_id = get_event_id(headers, raw_body)
     timestamp_str = headers.get("x-fwag-timestamp") or headers.get("X-FWAG-Timestamp")
     signature = headers.get("x-fwag-signature") or headers.get("X-FWAG-Signature")
 
@@ -35,8 +66,7 @@ def verify_webhook_signature(
     if abs(now - ts) > tolerance_seconds:
         return False
 
-    body_str = raw_body.decode("utf-8", errors="replace")
-    message = f"{timestamp_str}.{body_str}".encode()
+    message = timestamp_str.encode("utf-8") + b"." + raw_body
     expected_sig = hmac.new(
         secret.encode("utf-8"),
         message,
@@ -54,8 +84,10 @@ def validate_webhook_headers_and_signature(headers: Mapping[str, str], raw_body:
     settings = get_settings()
     secret = settings.FARROS_WA_WEBHOOK_SECRET
     if not secret:
-        # If secret is not set in local dev, check or raise 401 depending on setup. But we enforce check.
-        pass
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Webhook secret not configured",
+        )
 
     if not verify_webhook_signature(headers, raw_body, secret, settings.WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS):
         raise HTTPException(
@@ -64,7 +96,7 @@ def validate_webhook_headers_and_signature(headers: Mapping[str, str], raw_body:
         )
 
     event_type = headers.get("x-fwag-event") or headers.get("X-FWAG-Event") or ""
-    event_id = headers.get("x-fwag-event-id") or headers.get("X-FWAG-Event-Id") or ""
+    event_id = get_event_id(headers, raw_body) or ""
     timestamp_str = headers.get("x-fwag-timestamp") or headers.get("X-FWAG-Timestamp") or "0"
 
     return event_type, event_id, int(timestamp_str)
