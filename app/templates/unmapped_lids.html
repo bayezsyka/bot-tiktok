@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}LID Belum Dipetakan - Farros Media Bot{% endblock %}
+
+{% block content %}
+<div class="dashboard-header">
+    <h1>LID WhatsApp Belum Dipetakan</h1>
+    <p class="subtitle">Daftar pengirim @lid yang belum terhubung dengan nomor WhatsApp terdaftar</p>
+</div>
+
+{% if error %}
+<div class="alert alert-error"><span>{{ error }}</span></div>
+{% endif %}
+{% if success %}
+<div class="alert alert-success"><span>{{ success }}</span></div>
+{% endif %}
+
+<div class="card" style="margin-bottom: 20px;">
+    <div class="table-responsive">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>LID WhatsApp</th>
+                    <th>Kemunculan</th>
+                    <th>Preview Pesan Terakhir</th>
+                    <th>Pertama Terlihat</th>
+                    <th>Terakhir Terlihat</th>
+                    <th>Status</th>
+                    <th>Aksi & Resolusi</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in unmapped_records %}
+                <tr>
+                    <td>
+                        <span class="badge badge-lid" style="background: rgba(234, 179, 8, 0.2); color: #eab308; padding: 4px 10px; border-radius: 4px; font-family: monospace; font-weight: 600;">{{ item.lid_number }}</span>
+                    </td>
+                    <td><strong style="color: var(--primary-color, #3b82f6);">{{ item.occurrence_count }}x</strong></td>
+                    <td style="max-width: 250px; word-break: break-word;"><small>{{ item.last_message_preview or '-' }}</small></td>
+                    <td><small>{{ item.first_seen_at.strftime('%Y-%m-%d %H:%M') }}</small></td>
+                    <td><small>{{ item.last_seen_at.strftime('%Y-%m-%d %H:%M') }}</small></td>
+                    <td>
+                        {% if item.resolved_at %}
+                        <span class="badge badge-active" style="background: #16a34a; color: #fff;">Selesai ({{ item.resolved_at.strftime('%d/%m %H:%M') }})</span>
+                        {% else %}
+                        <span class="badge badge-inactive" style="background: #dc2626; color: #fff;">Belum Dipetakan</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if not item.resolved_at %}
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                            <!-- Option 1: Assign to existing number -->
+                            <form action="/admin/unmapped-lids/{{ item.id }}/assign-existing" method="post" class="inline-form" style="display: flex; gap: 5px;">
+                                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                <select name="allowed_number_id" required style="padding: 4px 8px; border-radius: 4px; background: #222; color: #fff; border: 1px solid #444;">
+                                    <option value="">-- Pilih Nomor Existing --</option>
+                                    {% for num in allowed_numbers %}
+                                    <option value="{{ num.id }}">{{ num.name }} ({{ num.phone_number }}){% if num.lid_number %} [LID: {{ num.lid_number }}]{% endif %}</option>
+                                    {% endfor %}
+                                </select>
+                                <button type="submit" class="btn btn-primary btn-xs">Pasangkan</button>
+                            </form>
+
+                            <!-- Option 2: Create new allowed number -->
+                            <details style="font-size: 12px; cursor: pointer;">
+                                <summary style="color: #60a5fa; font-weight: 500;">+ Buat Nomor Baru & Pasangkan</summary>
+                                <form action="/admin/unmapped-lids/{{ item.id }}/assign-new" method="post" style="margin-top: 6px; padding: 10px; background: rgba(255,255,255,0.05); border-radius: 6px; display: flex; flex-direction: column; gap: 6px;">
+                                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                    <input type="text" name="name" required placeholder="Nama Pengguna" style="padding: 4px 8px; font-size: 12px; border-radius: 4px; background: #1a1a1a; border: 1px solid #444; color: #fff;">
+                                    <input type="text" name="phone_number" required placeholder="Nomor WA (628...)" style="padding: 4px 8px; font-size: 12px; border-radius: 4px; background: #1a1a1a; border: 1px solid #444; color: #fff;">
+                                    <input type="text" name="notes" placeholder="Catatan (Opsional)" style="padding: 4px 8px; font-size: 12px; border-radius: 4px; background: #1a1a1a; border: 1px solid #444; color: #fff;">
+                                    <button type="submit" class="btn btn-success btn-xs" style="margin-top: 4px;">Simpan & Pasangkan LID</button>
+                                </form>
+                            </details>
+
+                            <div style="display: flex; gap: 5px; margin-top: 4px;">
+                                <form action="/admin/unmapped-lids/{{ item.id }}/resolve" method="post" class="inline-form">
+                                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" class="btn btn-secondary btn-xs">Tandai Selesai</button>
+                                </form>
+                                <form action="/admin/unmapped-lids/{{ item.id }}/delete" method="post" class="inline-form" onsubmit="return confirm('Hapus riwayat unmapped LID ini?');">
+                                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" class="btn btn-danger btn-xs">Hapus</button>
+                                </form>
+                            </div>
+                        </div>
+                        {% else %}
+                        <form action="/admin/unmapped-lids/{{ item.id }}/delete" method="post" class="inline-form" onsubmit="return confirm('Hapus riwayat unmapped LID ini?');">
+                            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn btn-secondary btn-xs">Hapus Riwayat</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="7" class="text-center empty-state">Tidak ada LID WhatsApp yang belum dipetakan.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if total_pages > 1 %}
+    <div class="pagination" style="display: flex; justify-content: center; gap: 8px; margin-top: 15px;">
+        {% for p in range(1, total_pages + 1) %}
+        <a href="/admin/unmapped-lids?page={{ p }}&search={{ search }}" class="btn btn-xs {% if p == page %}btn-primary{% else %}btn-secondary{% endif %}">{{ p }}</a>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

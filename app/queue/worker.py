@@ -88,14 +88,19 @@ class QueueWorker:
                 await session.flush()
                 return job.id
 
-    async def _send_failure_notification(self, sender_number: str, inbound_id: str) -> None:
+    async def _send_failure_notification(
+        self, sender_number: str, inbound_id: str, custom_message: str | None = None
+    ) -> None:
         try:
-            fail_msg = "konten tiktok tidak dapat diproses. pastikan link masih aktif, bersifat publik, dan dapat dibuka."
+            fail_msg = (
+                custom_message
+                or "konten tidak dapat diproses. pastikan link masih aktif, bersifat publik, dan dapat dibuka."
+            )
             await self.gateway.send_text(
                 to=sender_number,
                 text=fail_msg,
-                external_reference=f"tiktok-{inbound_id}-fail",
-                idempotency_key=f"tiktok-{inbound_id}-failure",
+                external_reference=f"media-{inbound_id}-fail",
+                idempotency_key=f"media-{inbound_id}-failure",
             )
         except Exception as e:
             logger.error(f"Could not send failure notification to {sender_number}: {e}")
@@ -124,11 +129,12 @@ class QueueWorker:
                         job_id, "failed", error_code="UNSUPPORTED_CONTENT", error_message=e.user_friendly_message
                     )
                     await session.commit()
-                    await self._send_failure_notification(job.sender_number, job.inbound_message_id)
+                    await self._send_failure_notification(job.sender_number, job.inbound_message_id, e.user_friendly_message)
                     return
                 except (DownloadTimeoutError, DownloadError, Exception) as e:
                     logger.error(f"[Stage: Extraction] Extraction error on job {job_id}: {e}")
-                    await self._handle_job_error(job, str(e), session)
+                    user_msg = getattr(e, "user_friendly_message", None)
+                    await self._handle_job_error(job, str(e), session, user_msg)
                     return
 
                 # STEP 2: Downloading content
@@ -148,11 +154,12 @@ class QueueWorker:
                         job_id, "failed", error_code="SIZE_EXCEEDED", error_message=e.user_friendly_message
                     )
                     await session.commit()
-                    await self._send_failure_notification(job.sender_number, job.inbound_message_id)
+                    await self._send_failure_notification(job.sender_number, job.inbound_message_id, e.user_friendly_message)
                     return
                 except Exception as e:
                     logger.error(f"[Stage: Download] Download error on job {job_id}: {e}")
-                    await self._handle_job_error(job, str(e), session)
+                    user_msg = getattr(e, "user_friendly_message", None)
+                    await self._handle_job_error(job, str(e), session, user_msg)
                     return
 
                 # Refresh job right before pre-processing validation
@@ -232,6 +239,7 @@ class QueueWorker:
 
         sent_count = 0
         failed_count = 0
+        platform = getattr(job, "platform", "tiktok") or "tiktok"
 
         for item in items:
             # Skip items already successfully sent
@@ -251,8 +259,11 @@ class QueueWorker:
                 failed_count += 1
                 continue
 
-            # Determine caption and idempotency key
-            if item.media_type == "video":
+            # Determine caption and idempotency key based on platform
+            if platform == "instagram":
+                caption = "video reels instagram berhasil diproses."
+                idemp_key = f"instagram-{job.inbound_message_id}-video"
+            elif item.media_type == "video":
                 caption = "video tiktok berhasil diproses."
                 idemp_key = f"tiktok-{job.inbound_message_id}-video"
             else:
@@ -298,7 +309,6 @@ class QueueWorker:
         if sent_count == total_items and total_items > 0:
             await queue_service.update_job_status(job.id, "completed")
         elif sent_count > 0:
-            # Partial completion for slideshow or some failed
             await queue_service.update_job_status(
                 job.id, "completed" if failed_count == 0 else "failed",
                 error_code="PARTIAL_FAILURE" if failed_count > 0 else None,
@@ -313,7 +323,10 @@ class QueueWorker:
         await session.commit()
 
 
-    async def _handle_job_error(self, job: DownloadJob, error_msg: str, session: AsyncSession) -> None:
+
+    async def _handle_job_error(
+        self, job: DownloadJob, error_msg: str, session: AsyncSession, user_friendly_message: str | None = None
+    ) -> None:
         queue_service = QueueService(session)
         if job.attempt_count < self.settings.MAX_JOB_RETRIES:
             # Requeue with backoff
@@ -328,5 +341,5 @@ class QueueWorker:
             await queue_service.update_job_status(
                 job.id, "failed", error_code="MAX_RETRIES_EXCEEDED", error_message=error_msg[:300]
             )
-            await self._send_failure_notification(job.sender_number, job.inbound_message_id)
+            await self._send_failure_notification(job.sender_number, job.inbound_message_id, user_friendly_message)
         await session.commit()

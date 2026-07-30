@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - Farros TikTok Bot{% endblock %}
+{% block title %}Dashboard - Farros Media Bot{% endblock %}
 
 {% block content %}
 <div class="dashboard-header">
-    <h1>Ikhtisar Sistem</h1>
-    <p class="subtitle">Real-time status pemrosesan media TikTok dan gateway WhatsApp</p>
+    <h1>Ikhtisar Sistem Media Bot</h1>
+    <p class="subtitle">Real-time status pemrosesan media TikTok & Instagram Reels dan gateway WhatsApp</p>
 </div>
 
 <div class="stats-grid">
@@ -14,6 +14,13 @@
         <div class="stat-info">
             <span class="stat-label">Nomor Whitelist Aktif</span>
             <span class="stat-value">{{ active_numbers }}</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon icon-warning" style="background: rgba(234, 179, 8, 0.2); color: #eab308;">⚠️</div>
+        <div class="stat-info">
+            <span class="stat-label">LID Belum Dipetakan</span>
+            <span class="stat-value"><a href="/admin/unmapped-lids" style="color: inherit; text-decoration: underline;">{{ unmapped_count }}</a></span>
         </div>
     </div>
     <div class="stat-card">
@@ -38,17 +45,10 @@
         </div>
     </div>
     <div class="stat-card">
-        <div class="stat-icon icon-disk">💾</div>
+        <div class="stat-icon" style="background: rgba(236, 72, 153, 0.2); color: #ec4899;">📊</div>
         <div class="stat-info">
-            <span class="stat-label">Penggunaan Disk Temp</span>
-            <span class="stat-value">{{ (temp_disk_used_bytes / (1024 * 1024))|round(1) }} MB</span>
-        </div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-icon icon-free">🗄️</div>
-        <div class="stat-info">
-            <span class="stat-label">Sisa Ruang Disk</span>
-            <span class="stat-value">{{ (disk_free_bytes / (1024 * 1024 * 1024))|round(2) }} GB</span>
+            <span class="stat-label">TikTok / Instagram</span>
+            <span class="stat-value">{{ stats.tiktok_jobs }} / {{ stats.instagram_jobs }}</span>
         </div>
     </div>
 </div>
@@ -63,8 +63,9 @@
             <thead>
                 <tr>
                     <th>Waktu Masuk</th>
+                    <th>Platform</th>
                     <th>Nomor Pengirim</th>
-                    <th>Link TikTok</th>
+                    <th>Link Media</th>
                     <th>Tipe</th>
                     <th>Status</th>
                     <th>Aksi</th>
@@ -74,6 +75,13 @@
                 {% for job in recent_jobs %}
                 <tr>
                     <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>
+                        {% if job.platform == 'instagram' %}
+                        <span class="badge" style="background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888); color: #fff; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 11px;">Instagram</span>
+                        {% else %}
+                        <span class="badge" style="background: #000; color: #00f2fe; border: 1px solid #00f2fe; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 11px;">TikTok</span>
+                        {% endif %}
+                    </td>
                     <td><span class="badge badge-phone">{{ job.sender_number }}</span></td>
                     <td class="td-url"><a href="{{ job.original_url }}" target="_blank" rel="noopener noreferrer">{{ job.original_url[:45] }}{% if job.original_url|length > 45 %}...{% endif %}</a></td>
                     <td><span class="badge badge-type">{{ job.content_type or '-' }}</span></td>
@@ -86,7 +94,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="6" class="text-center empty-state">Belum ada aktivitas job yang tercatat.</td>
+                    <td colspan="7" class="text-center empty-state">Belum ada aktivitas job yang tercatat.</td>
                 </tr>
                 {% endfor %}
             </tbody>

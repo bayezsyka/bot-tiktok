@@ -1,15 +1,23 @@
 {% extends "base.html" %}
 
-{% block title %}Riwayat Job - Farros TikTok Bot{% endblock %}
+{% block title %}Riwayat Job - Farros Media Bot{% endblock %}
 
 {% block content %}
 <div class="dashboard-header">
     <h1>Riwayat Pemrosesan & Antrean Job</h1>
-    <p class="subtitle">Filter dan pantau setiap proses unduhan dan pengiriman media TikTok ke WhatsApp</p>
+    <p class="subtitle">Filter dan pantau setiap proses unduhan dan pengiriman media TikTok & Instagram ke WhatsApp</p>
 </div>
 
 <div class="card filter-bar">
     <form action="/admin/history" method="get" class="filter-form">
+        <div class="filter-group">
+            <label for="platform">Platform</label>
+            <select id="platform" name="platform">
+                <option value="all" {% if filter_platform == 'all' or not filter_platform %}selected{% endif %}>Semua Platform</option>
+                <option value="tiktok" {% if filter_platform == 'tiktok' %}selected{% endif %}>TikTok</option>
+                <option value="instagram" {% if filter_platform == 'instagram' %}selected{% endif %}>Instagram</option>
+            </select>
+        </div>
         <div class="filter-group">
             <label for="phone_number">Nomor WhatsApp</label>
             <input type="text" id="phone_number" name="phone_number" value="{{ filter_phone }}" placeholder="Filter nomor...">
@@ -55,8 +63,9 @@
             <thead>
                 <tr>
                     <th>Waktu Masuk</th>
+                    <th>Platform</th>
                     <th>Nomor Pengirim</th>
-                    <th>Link TikTok</th>
+                    <th>Link Media</th>
                     <th>Tipe</th>
                     <th>Media Terkirim</th>
                     <th>Status</th>
@@ -67,6 +76,13 @@
                 {% for job in jobs %}
                 <tr>
                     <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td>
+                        {% if job.platform == 'instagram' %}
+                        <span class="badge" style="background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888); color: #fff; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 11px;">Instagram</span>
+                        {% else %}
+                        <span class="badge" style="background: #000; color: #00f2fe; border: 1px solid #00f2fe; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 11px;">TikTok</span>
+                        {% endif %}
+                    </td>
                     <td><span class="badge badge-phone">{{ job.sender_number }}</span></td>
                     <td class="td-url">
                         <a href="{{ job.original_url }}" target="_blank" rel="noopener noreferrer">{{ job.original_url[:50] }}{% if job.original_url|length > 50 %}...{% endif %}</a>
@@ -87,7 +103,7 @@
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="7" class="text-center empty-state">Tidak ada job yang sesuai kriteria filter.</td>
+                    <td colspan="8" class="text-center empty-state">Tidak ada job yang sesuai kriteria filter.</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -97,13 +113,13 @@
     {% if total_pages > 1 %}
     <div class="pagination">
         {% if page > 1 %}
-        <a href="?page={{ page - 1 }}&phone_number={{ filter_phone }}&status={{ filter_status }}&content_type={{ filter_type }}&search={{ filter_search }}" class="page-link">&laquo; Sebelumnya</a>
+        <a href="?page={{ page - 1 }}&platform={{ filter_platform }}&phone_number={{ filter_phone }}&status={{ filter_status }}&content_type={{ filter_type }}&search={{ filter_search }}" class="page-link">&laquo; Sebelumnya</a>
         {% endif %}
         
         <span class="page-info">Halaman {{ page }} dari {{ total_pages }}</span>
 
         {% if page < total_pages %}
-        <a href="?page={{ page + 1 }}&phone_number={{ filter_phone }}&status={{ filter_status }}&content_type={{ filter_type }}&search={{ filter_search }}" class="page-link">Selanjutnya &raquo;</a>
+        <a href="?page={{ page + 1 }}&platform={{ filter_platform }}&phone_number={{ filter_phone }}&status={{ filter_status }}&content_type={{ filter_type }}&search={{ filter_search }}" class="page-link">Selanjutnya &raquo;</a>
         {% endif %}
     </div>
     {% endif %}

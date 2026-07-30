@@ -32,10 +32,26 @@ class AllowedNumber(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(150), nullable=False)
     phone_number: Mapped[str] = mapped_column(String(30), unique=True, index=True, nullable=False)
+    lid_number: Mapped[str | None] = mapped_column(String(50), unique=True, index=True, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     total_jobs: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+
+
+class UnmappedLid(Base):
+    __tablename__ = "unmapped_lids"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    lid_number: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
+    last_inbound_message_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_message_preview: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 
@@ -47,6 +63,7 @@ class DownloadJob(Base):
     inbound_message_id: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
     webhook_event_id: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
     sender_number: Mapped[str] = mapped_column(String(30), index=True, nullable=False)
+    platform: Mapped[str] = mapped_column(String(20), default="tiktok", index=True, nullable=False)
     original_url: Mapped[str] = mapped_column(Text, nullable=False)
     canonical_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # 'video' or 'photo'
@@ -98,3 +115,10 @@ class WebhookEvent(Base):
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SchemaMigration(Base):
+    __tablename__ = "schema_migrations"
+
+    version: Mapped[str] = mapped_column(String(50), primary_key=True)
+    applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

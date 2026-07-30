@@ -1,6 +1,7 @@
 import ipaddress
 import re
-from urllib.parse import urlparse
+from dataclasses import dataclass
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
 
@@ -12,9 +13,27 @@ ALLOWED_TIKTOK_DOMAINS: set[str] = {
     "vt.tiktok.com",
 }
 
-URL_REGEX = re.compile(
+ALLOWED_INSTAGRAM_DOMAINS: set[str] = {
+    "instagram.com",
+    "www.instagram.com",
+    "m.instagram.com",
+}
+
+TIKTOK_URL_REGEX = re.compile(
     r"https?://(?:www\.|m\.|vm\.|vt\.)?tiktok\.com/[^\s]+"
 )
+
+INSTAGRAM_URL_REGEX = re.compile(
+    r"https?://(?:www\.|m\.)?instagram\.com/reels?/[A-Za-z0-9_-]+[^\s]*"
+)
+
+
+@dataclass
+class ExtractedMediaUrl:
+    original_url: str
+    platform: str  # 'tiktok' or 'instagram'
+    content_hint: str  # 'video' or 'photo' or 'reel'
+    canonical_url: str | None = None
 
 
 def normalize_phone_number(raw_number: str) -> str | None:
@@ -40,10 +59,6 @@ def normalize_phone_number(raw_number: str) -> str | None:
         digits = "62" + digits
     elif digits.startswith("6208"):
         digits = "62" + digits[3:]
-    elif not digits.startswith("62"):
-        # If it doesn't start with 62 and wasn't converted above, it might be invalid Indonesian number or foreign
-        # But if it already starts with 62 we keep it
-        pass
 
     if digits.startswith("62") and 10 <= len(digits) <= 15:
         return digits
@@ -55,12 +70,6 @@ def parse_lid_mapping(mapping_str: str | None = None) -> dict[str, str]:
     """
     Parse FARROS_WA_LID_MAP environment string into a dictionary of {LID: 628...}.
     Format: FARROS_WA_LID_MAP=84306181542117:628xxxxxxxxxx,12345678901234:628yyyyyyyyyy
-    - Separates pairs using comma
-    - Separates LID and number using colon
-    - Only accepts digits for LID
-    - Only accepts destination numbers formatted starting with 62 and length 10-15 digits
-    - Ignores invalid entries safely
-    - Does NOT log mapping
     """
     if mapping_str is None:
         from app.config import get_settings
@@ -81,11 +90,9 @@ def parse_lid_mapping(mapping_str: str | None = None) -> dict[str, str]:
         lid_part = parts[0].strip()
         num_part = parts[1].strip()
 
-        # Only accept digits for LID
         if not lid_part or not lid_part.isdigit():
             continue
 
-        # Only accept destination number format 62 and length 10-15 digits
         if not num_part or not num_part.isdigit() or not num_part.startswith("62") or not (10 <= len(num_part) <= 15):
             continue
 
@@ -105,85 +112,151 @@ def resolve_lid_to_phone(lid: str, mapping_str: str | None = None) -> str | None
     return mapping.get(digits_lid)
 
 
-
-def is_safe_hostname(hostname: str) -> bool:
-
-    """Check hostname against SSRF targets (private IPs, localhost, cloud metadata endpoints)."""
+def is_safe_hostname(hostname: str) -> tuple[bool, str | None]:
+    """
+    Check hostname against SSRF targets and allowlists.
+    Returns (is_safe, platform_name).
+    """
     if not hostname:
-        return False
+        return False, None
 
     hostname = hostname.lower().strip()
     if hostname in ("localhost", "localhost.localdomain", "0.0.0.0", "127.0.0.1", "::1"):
-        return False
+        return False, None
 
     try:
-        # Check if hostname is directly an IP
         ip_obj = ipaddress.ip_address(hostname)
         if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_reserved:
-            return False
-        # Specifically check AWS/cloud metadata address
+            return False, None
         if str(ip_obj) == "169.254.169.254":
-            return False
+            return False, None
     except ValueError:
         pass
 
-    # Ensure hostname ends with one of allowed domains
-    if hostname not in ALLOWED_TIKTOK_DOMAINS and not any(
-        hostname.endswith("." + domain) for domain in ALLOWED_TIKTOK_DOMAINS
-    ):
-        return False
+    # Check TikTok allowlist
+    if hostname in ALLOWED_TIKTOK_DOMAINS or any(hostname.endswith("." + d) for d in ALLOWED_TIKTOK_DOMAINS):
+        return True, "tiktok"
 
-    return True
+    # Check Instagram allowlist
+    if hostname in ALLOWED_INSTAGRAM_DOMAINS or any(hostname.endswith("." + d) for d in ALLOWED_INSTAGRAM_DOMAINS):
+        return True, "instagram"
+
+    return False, None
 
 
-def check_url_security(url_str: str) -> bool:
-    """Validate scheme and domain for a single URL string."""
+def check_url_security(url_str: str) -> tuple[bool, str | None]:
+    """
+    Validate scheme, credentials, port, domain, and path security.
+    Returns (is_safe, platform_name).
+    """
     try:
         parsed = urlparse(url_str)
         if parsed.scheme.lower() != "https":
-            return False
-        if not parsed.hostname or not is_safe_hostname(parsed.hostname):
-            return False
-        return True
+            return False, None
+        if parsed.username or parsed.password:
+            return False, None
+        if parsed.port and parsed.port not in (80, 443):
+            return False, None
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False, None
+
+        is_safe, platform = is_safe_hostname(hostname)
+        if not is_safe or not platform:
+            return False, None
+
+        # Platform specific path checks
+        path = parsed.path.lower()
+        if platform == "instagram":
+            # Instagram path MUST be /reel/{shortcode} or /reels/{shortcode}
+            parts = [p for p in path.split("/") if p]
+            if len(parts) < 2 or parts[0] not in ("reel", "reels"):
+                return False, None
+            # Reject invalid endpoints
+            if any(p in ("accounts", "login", "explore", "direct", "stories", "live") for p in parts):
+                return False, None
+            # Reject empty shortcode
+            if not parts[1].strip():
+                return False, None
+
+        return True, platform
     except Exception:
-        return False
+        return False, None
 
 
-is_safe_tiktok_url = check_url_security
+def is_safe_tiktok_url(url_str: str) -> bool:
+    is_safe, platform = check_url_security(url_str)
+    return bool(is_safe and platform == "tiktok")
 
 
-def extract_tiktok_url(text: str) -> str | None:
-    """Extract the first valid TikTok HTTPS URL from text message."""
+def sanitize_media_url(url_str: str) -> str:
+    """Clean fragment and strip unneeded trailing punctuation from URL."""
+    try:
+        clean_url = url_str.strip(".,!?;:\"'()[]{}<>")
+        parsed = urlparse(clean_url)
+        # Reconstruct URL without fragment
+        sanitized = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, ""))
+        return sanitized
+    except Exception:
+        return url_str.strip(".,!?;:\"'()[]{}<>")
+
+
+def extract_supported_media_url(text: str) -> ExtractedMediaUrl | None:
+    """Extract the first valid TikTok or Instagram HTTPS URL from text message."""
     if not text:
         return None
 
-    # Find all potential URLs in text
     words = text.split()
     for word in words:
-        # Strip punctuation at end if attached
-        clean_word = word.strip(".,!?;:\"'()[]{}<>")
-        if check_url_security(clean_word):
-            return clean_word
+        clean_word = sanitize_media_url(word)
+        is_safe, platform = check_url_security(clean_word)
+        if is_safe and platform:
+            hint = "reel" if platform == "instagram" else "video"
+            return ExtractedMediaUrl(
+                original_url=clean_word,
+                platform=platform,
+                content_hint=hint,
+            )
 
-    # Fallback to regex search
-    matches = URL_REGEX.findall(text)
-    for match in matches:
-        clean_match = match.strip(".,!?;:\"'()[]{}<>")
-        if check_url_security(clean_match):
-            return str(clean_match)
+    # Fallback to regex matches
+    for match in TIKTOK_URL_REGEX.findall(text):
+        clean_match = sanitize_media_url(match)
+        is_safe, platform = check_url_security(clean_match)
+        if is_safe and platform == "tiktok":
+            return ExtractedMediaUrl(original_url=clean_match, platform="tiktok", content_hint="video")
+
+    for match in INSTAGRAM_URL_REGEX.findall(text):
+        clean_match = sanitize_media_url(match)
+        is_safe, platform = check_url_security(clean_match)
+        if is_safe and platform == "instagram":
+            return ExtractedMediaUrl(original_url=clean_match, platform="instagram", content_hint="reel")
 
     return None
 
 
-async def resolve_canonical_tiktok_url(url_str: str, max_redirects: int = 5) -> str | None:
+def extract_tiktok_url(text: str) -> str | None:
+    """Backward compatibility wrapper to extract TikTok URL string."""
+    res = extract_supported_media_url(text)
+    if res and res.platform == "tiktok":
+        return res.original_url
+    return None
+
+
+async def resolve_canonical_media_url(url_str: str, max_redirects: int = 5) -> str | None:
     """
-    Follow up to `max_redirects` redirects safely to obtain the canonical TikTok URL.
-    Verifies every target along the chain against SSRF and domain allowlist.
+    Follow redirects safely to obtain canonical media URL.
+    Verifies target redirect URL against SSRF and allowlist.
     """
-    if not check_url_security(url_str):
+    is_safe, platform = check_url_security(url_str)
+    if not is_safe or not platform:
         return None
 
     current_url = url_str
+
+    # Instagram does not strictly require redirect resolution via HEAD
+    if platform == "instagram":
+        return current_url
 
     async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
         for _ in range(max_redirects):
@@ -195,7 +268,6 @@ async def resolve_canonical_tiktok_url(url_str: str, max_redirects: int = 5) -> 
                     },
                 )
             except Exception:
-                # If HEAD fails or forbidden, try GET with stream=True or stop and return current_url if already canonical
                 break
 
             if response.status_code in (301, 302, 303, 307, 308):
@@ -203,16 +275,19 @@ async def resolve_canonical_tiktok_url(url_str: str, max_redirects: int = 5) -> 
                 if not location:
                     break
 
-                # Resolve relative redirects if any (though TikTok issues absolute)
-                from urllib.parse import urljoin
                 next_url = urljoin(current_url, location)
-
-                # Validate the target redirect URL
-                if not check_url_security(next_url):
+                next_safe, _ = check_url_security(next_url)
+                if not next_safe:
                     return None
 
                 current_url = next_url
             else:
                 break
 
-    return current_url if check_url_security(current_url) else None
+    safe_end, _ = check_url_security(current_url)
+    return current_url if safe_end else None
+
+
+async def resolve_canonical_tiktok_url(url_str: str, max_redirects: int = 5) -> str | None:
+    """Backward compatibility alias for resolve_canonical_media_url."""
+    return await resolve_canonical_media_url(url_str, max_redirects=max_redirects)

@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     FFMPEG_BINARY: str = "ffmpeg"
     FFPROBE_BINARY: str = "ffprobe"
     TIKTOK_COOKIES_FILE: str = ""
+    INSTAGRAM_COOKIES_FILE: str = ""
 
     MAX_MEDIA_MB: int = 15
     MAX_SOURCE_DOWNLOAD_MB: int = 500

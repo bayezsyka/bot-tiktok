@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import DownloadItem, DownloadJob
 from app.downloader.exceptions import DownloadError
+from app.downloader.instagram_provider import InstagramReelProvider
 from app.downloader.providers import DownloaderProvider
 from app.downloader.tiktok_photo_provider import TikTokPhotoProvider
 from app.downloader.yt_dlp_provider import YtDlpProvider
@@ -15,44 +16,60 @@ from app.security.urls import resolve_canonical_tiktok_url
 logger = logging.getLogger(__name__)
 
 
+
 class DownloaderService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.yt_dlp = YtDlpProvider()
         self.photo_provider = TikTokPhotoProvider()
+        self.ig_provider = InstagramReelProvider()
 
     async def extract_and_prepare_job(
         self, job: DownloadJob, job_dir: Path
     ) -> tuple[DownloaderProvider, Any]:
         """
-        Detect content type using providers, extract metadata, and populate DownloadItem records in DB.
+        Detect content type using providers based on platform, extract metadata, and populate DownloadItem records.
         Returns (selected_provider, metadata).
         """
+        platform = getattr(job, "platform", "tiktok") or "tiktok"
+
         if not job.canonical_url:
             canonical_url = await resolve_canonical_tiktok_url(job.original_url)
             if not canonical_url:
+
                 raise DownloadError(
-                    "Link TikTok tidak valid atau tidak aman.",
-                    user_friendly_message="Link TikTok tidak valid, berisiko, atau tidak dapat diakses.",
+                    "Link media tidak valid atau tidak aman.",
+                    user_friendly_message="Link media tidak valid, berisiko, atau tidak dapat diakses.",
                 )
             job.canonical_url = canonical_url
         else:
             canonical_url = job.canonical_url
 
-        # Try yt-dlp first for video
-        metadata = await self.yt_dlp.extract_metadata(canonical_url, job_dir)
-        provider: DownloaderProvider = self.yt_dlp
+        provider: DownloaderProvider
+        metadata = None
 
-        # If yt-dlp didn't return metadata, try photo provider
-        if not metadata:
-            metadata = await self.photo_provider.extract_metadata(canonical_url, job_dir)
-            provider = self.photo_provider
+        if platform == "instagram":
+            provider = self.ig_provider
+            metadata = await self.ig_provider.extract_metadata(canonical_url, job_dir)
+            if not metadata or not metadata.items:
+                raise DownloadError(
+                    "Link Instagram Reels tidak dapat diproses.",
+                    user_friendly_message="reels instagram tidak dapat diakses. pastikan akun dan kontennya bersifat publik.",
+                )
+        else:
+            # TikTok platform
+            metadata = await self.yt_dlp.extract_metadata(canonical_url, job_dir)
+            provider = self.yt_dlp
 
-        if not metadata or not metadata.items:
-            raise DownloadError(
-                "Link TikTok tidak dapat dipahami sebagai video maupun postingan foto.",
-                user_friendly_message="Konten TikTok tidak dapat diproses. pastikan link masih aktif, bersifat publik, dan dapat dibuka.",
-            )
+            if not metadata:
+                metadata = await self.photo_provider.extract_metadata(canonical_url, job_dir)
+                provider = self.photo_provider
+
+            if not metadata or not metadata.items:
+                raise DownloadError(
+                    "Link TikTok tidak dapat dipahami sebagai video maupun postingan foto.",
+                    user_friendly_message="konten tidak dapat diproses. pastikan link masih aktif, bersifat publik, dan dapat dibuka.",
+                )
 
         # Update Job fields
         job.content_type = metadata.content_type
@@ -114,7 +131,6 @@ class DownloaderService:
                 self.session.add(db_item)
                 items_dict[item_meta.position] = db_item
 
-
             if db_item.status == "sent" or db_item.gateway_message_id:
                 total_source_size += (db_item.source_size_bytes or 0)
                 continue
@@ -127,7 +143,7 @@ class DownloaderService:
             else:
                 raise DownloadError(
                     f"File fisik hasil download untuk posisi {item_meta.position} tidak ditemukan di disk.",
-                    user_friendly_message="Gagal mengunduh file media dari TikTok. File tidak ditemukan."
+                    user_friendly_message="Gagal mengunduh file media. File tidak ditemukan."
                 )
 
         # Verify no non-sent item is left without a local_filename
@@ -136,7 +152,7 @@ class DownloaderService:
                 if not item.local_filename or not os.path.exists(item.local_filename):
                     raise DownloadError(
                         f"Item posisi {item.position} tidak memiliki file hasil unduhan lokal.",
-                        user_friendly_message="Gagal mengunduh seluruh file media dari TikTok."
+                        user_friendly_message="Gagal mengunduh seluruh file media."
                     )
 
         job.source_size_bytes = total_source_size

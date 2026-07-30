@@ -8,10 +8,19 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.connection import get_db
-from app.database.repositories import AllowedNumberRepository, JobRepository, WebhookEventRepository
+from app.database.repositories import (
+    AllowedNumberRepository,
+    JobRepository,
+    UnmappedLidRepository,
+    WebhookEventRepository,
+)
 from app.gateway.client import FarrosWAGatewayClient
 from app.security.rate_limit import check_webhook_rate_limit
-from app.security.urls import extract_tiktok_url, normalize_phone_number, resolve_lid_to_phone
+from app.security.urls import (
+    extract_supported_media_url,
+    normalize_phone_number,
+    resolve_lid_to_phone,
+)
 from app.webhooks.parser import parse_inbound_message
 from app.webhooks.schemas import WebhookEventResponse
 from app.webhooks.signature import validate_webhook_headers_and_signature
@@ -24,12 +33,12 @@ async def _send_initial_reply_background(sender_number: str, inbound_id: str) ->
     """Send acknowledgment message in background so webhook returns 200 immediately."""
     try:
         client = FarrosWAGatewayClient()
-        ack_text = "oke, konten tiktok sedang diunduh dan diproses. kalau sudah selesai, akan langsung kami kirim."
+        ack_text = "oke, konten sedang diunduh dan diproses. kalau sudah selesai, akan langsung kami kirim."
         await client.send_text(
             to=sender_number,
             text=ack_text,
-            external_reference=f"tiktok-{inbound_id}",
-            idempotency_key=f"tiktok-{inbound_id}-processing",
+            external_reference=f"media-{inbound_id}",
+            idempotency_key=f"media-{inbound_id}-processing",
         )
     except Exception as e:
         logger.error(f"Failed to send initial reply for inbound {inbound_id}: {e}")
@@ -76,49 +85,68 @@ async def handle_farros_wa_webhook(
     if parsed.is_group or parsed.from_me:
         return WebhookEventResponse(status="ok", message="Ignored group/self message")
 
-    # 5. Resolve LID or normalize phone number
-    norm_phone = None
+    # 5. Resolve sender (LID vs Phone)
+    number_repo = AllowedNumberRepository(db)
+    allowed_number = None
+
     if parsed.is_lid or "@lid" in parsed.sender_number:
         lid_to_lookup = parsed.lid_number
         if not lid_to_lookup:
             lid_to_lookup = parsed.sender_number.split("@")[0].strip() if parsed.sender_number else ""
             lid_to_lookup = "".join(ch for ch in lid_to_lookup if ch.isdigit())
 
-        mapped_phone = resolve_lid_to_phone(lid_to_lookup) if lid_to_lookup else None
-        if not mapped_phone:
-            logger.warning(
-                f"Received webhook payload with unmapped LID sender for inbound_id: {parsed.inbound_message_id}"
-            )
+        if lid_to_lookup:
+            # Step 1: Lookup database allowed_numbers.lid_number
+            allowed_number = await number_repo.get_by_lid(lid_to_lookup)
+
+            # Step 2: Fallback to FARROS_WA_LID_MAP environment variable
+            if not allowed_number:
+                mapped_phone = resolve_lid_to_phone(lid_to_lookup)
+                if mapped_phone:
+                    allowed_number = await number_repo.get_by_phone(mapped_phone)
+
+        # Step 3: If still not mapped to any allowed number, record to unmapped_lids
+        if not allowed_number:
+            if lid_to_lookup:
+                unmapped_repo = UnmappedLidRepository(db)
+                await unmapped_repo.upsert_unmapped(
+                    lid_number=lid_to_lookup,
+                    inbound_message_id=parsed.inbound_message_id,
+                    message_preview=parsed.message_text,
+                )
+                await db.commit()
+                logger.warning(
+                    f"Recorded unmapped LID {lid_to_lookup} for inbound_id {parsed.inbound_message_id}"
+                )
             return WebhookEventResponse(status="ok", message="Ignored LID sender without routable phone number")
-        norm_phone = mapped_phone
     else:
-        norm_phone = normalize_phone_number(parsed.sender_number)
-        if not norm_phone:
+        norm_phone_candidate = normalize_phone_number(parsed.sender_number)
+        if not norm_phone_candidate:
             return WebhookEventResponse(status="ok", message="Invalid sender phone format")
+        allowed_number = await number_repo.get_by_phone(norm_phone_candidate)
 
-
-    number_repo = AllowedNumberRepository(db)
-    allowed_number = await number_repo.get_by_phone(norm_phone)
+    # Validate active status
     if not allowed_number or not allowed_number.is_active:
         return WebhookEventResponse(status="ok", message="Sender not in active whitelist")
+
+    norm_phone = allowed_number.phone_number
 
     # 6. Check rate limit
     try:
         check_webhook_rate_limit(norm_phone)
     except Exception:
-        # Rate limited: ignore without response or return HTTP 200
         return WebhookEventResponse(status="ok", message="Rate limit exceeded for sender")
 
-    # 7. Check if sender already has an active job
+    # 7. Check if sender already has an active job across all platforms
     job_repo = JobRepository(db)
     active_job = await job_repo.get_active_job_for_number(norm_phone)
     if active_job:
         return WebhookEventResponse(status="ok", message="Sender already has an active job")
 
-    # 8. Extract & validate TikTok URL (locally without network requests)
-    tiktok_url = extract_tiktok_url(parsed.message_text)
-    if not tiktok_url:
-        return WebhookEventResponse(status="ok", message="No valid TikTok URL found in message")
+    # 8. Extract & validate supported media URL (TikTok or Instagram Reels)
+    extracted = extract_supported_media_url(parsed.message_text)
+    if not extracted:
+        return WebhookEventResponse(status="ok", message="No valid media URL found in message")
 
     # Check if this exact inbound_message_id is already in DownloadJob
     existing_job = await job_repo.get_by_inbound_message_id(parsed.inbound_message_id)
@@ -132,14 +160,14 @@ async def handle_farros_wa_webhook(
             inbound_message_id=parsed.inbound_message_id,
             webhook_event_id=event_id,
             sender_number=norm_phone,
-            original_url=tiktok_url,
+            original_url=extracted.original_url,
             canonical_url=None,
+            platform=extracted.platform,
         )
         await number_repo.increment_job_stats(norm_phone)
         await db.commit()
     except IntegrityError as e:
         await db.rollback()
-        # Check if due to concurrent duplicate delivery
         concurrent_event = await event_repo.get_by_event_id(event_id)
         if concurrent_event:
             if concurrent_event.payload_hash == payload_hash:
@@ -153,9 +181,7 @@ async def handle_farros_wa_webhook(
             return WebhookEventResponse(status="ok", message="Inbound message already processed")
         raise
 
-
     # 10. Send initial reply asynchronously/in background
     asyncio.create_task(_send_initial_reply_background(norm_phone, parsed.inbound_message_id))
 
     return WebhookEventResponse(status="ok", message="Job queued successfully")
-

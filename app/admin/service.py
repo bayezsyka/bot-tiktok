@@ -3,23 +3,26 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.admin.allowed_number_service import AllowedNumberService
 from app.config import get_settings
 from app.database.models import AllowedNumber
-from app.database.repositories import AllowedNumberRepository, JobRepository
+from app.database.repositories import AllowedNumberRepository, JobRepository, UnmappedLidRepository
 from app.media.cleanup import check_disk_space
-from app.security.urls import normalize_phone_number
 
 
 class AdminService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.number_repo = AllowedNumberRepository(session)
+        self.unmapped_repo = UnmappedLidRepository(session)
         self.job_repo = JobRepository(session)
+        self.number_service = AllowedNumberService(session)
         self.settings = get_settings()
 
     async def get_dashboard_data(self) -> dict[str, Any]:
         stats = await self.job_repo.get_dashboard_stats()
         active_numbers = await self.number_repo.count_active()
+        unmapped_count = await self.unmapped_repo.count_unresolved()
         recent_jobs = await self.job_repo.list_recent_jobs(limit=10)
 
         # Calculate temp disk usage
@@ -36,46 +39,29 @@ class AdminService:
         return {
             "stats": stats,
             "active_numbers": active_numbers,
+            "unmapped_count": unmapped_count,
             "recent_jobs": recent_jobs,
             "temp_disk_used_bytes": used_bytes,
             "disk_free_bytes": check_disk_space(),
         }
 
-    async def add_allowed_number(self, name: str, raw_phone: str, notes: str | None = None) -> tuple[AllowedNumber | None, str | None]:
-        norm_phone = normalize_phone_number(raw_phone)
-        if not norm_phone:
-            return None, "Format nomor telepon tidak valid. Gunakan format 628xxx (10-15 digit)."
+    async def add_allowed_number(
+        self, name: str, raw_phone: str, raw_lid: str | None = None, notes: str | None = None
+    ) -> tuple[AllowedNumber | None, str | None]:
+        return await self.number_service.add_number(name=name, raw_phone=raw_phone, raw_lid=raw_lid, notes=notes)
 
-        existing = await self.number_repo.get_by_phone(norm_phone)
-        if existing:
-            return None, f"Nomor telepon {norm_phone} sudah terdaftar dalam whitelist."
-
-        number = await self.number_repo.create_number(name=name.strip(), phone_number=norm_phone, notes=notes)
-        await self.session.commit()
-        return number, None
-
-    async def edit_allowed_number(self, number_id: int, name: str, raw_phone: str, notes: str | None = None) -> tuple[AllowedNumber | None, str | None]:
-        norm_phone = normalize_phone_number(raw_phone)
-        if not norm_phone:
-            return None, "Format nomor telepon tidak valid."
-
-        existing = await self.number_repo.get_by_phone(norm_phone)
-        if existing and existing.id != number_id:
-            return None, f"Nomor telepon {norm_phone} sudah digunakan oleh entri lain."
-
-        number = await self.number_repo.update_number(number_id, name.strip(), norm_phone, notes)
-        await self.session.commit()
-        return number, None
+    async def edit_allowed_number(
+        self, number_id: int, name: str, raw_phone: str, raw_lid: str | None = None, notes: str | None = None
+    ) -> tuple[AllowedNumber | None, str | None]:
+        return await self.number_service.update_number(
+            number_id=number_id, name=name, raw_phone=raw_phone, raw_lid=raw_lid, notes=notes
+        )
 
     async def toggle_number_status(self, number_id: int) -> AllowedNumber | None:
-        num = await self.number_repo.toggle_active(number_id)
-        await self.session.commit()
-        return num
+        return await self.number_service.toggle_active(number_id)
 
     async def delete_number(self, number_id: int) -> bool:
-        res = await self.number_repo.delete_number(number_id)
-        await self.session.commit()
-        return res
+        return await self.number_service.delete_number(number_id)
 
     async def retry_failed_job(self, job_id: str) -> tuple[bool, str]:
         job = await self.job_repo.get_by_id(job_id)
@@ -93,7 +79,6 @@ class AdminService:
         job.status = "queued"
         job.error_code = None
         job.error_message = None
-        # Allow retry by ensuring attempt count allows worker to pick up
         if job.attempt_count >= self.settings.MAX_JOB_RETRIES:
             job.attempt_count = 0
 

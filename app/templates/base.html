@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Farros TikTok Bot Admin{% endblock %}</title>
+    <title>{% block title %}Farros Media Bot Admin{% endblock %}</title>
     <meta name="csrf-token" content="{{ csrf_token }}">
     <link rel="stylesheet" href="/static/style.css">
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
@@ -17,11 +17,12 @@
         <div class="nav-container">
             <div class="nav-brand">
                 <span class="brand-badge">PROD</span>
-                <a href="/admin">Farros TikTok Bot</a>
+                <a href="/admin">Farros Media Bot</a>
             </div>
             <nav class="nav-links">
                 <a href="/admin" class="nav-item {% if request.url.path == '/admin' or request.url.path == '/admin/' %}active{% endif %}">Dashboard</a>
-                <a href="/admin/numbers" class="nav-item {% if '/numbers' in request.url.path %}active{% endif %}">Whitelist Nomor</a>
+                <a href="/admin/allowed-numbers" class="nav-item {% if '/allowed-numbers' in request.url.path or '/numbers' in request.url.path %}active{% endif %}">Nomor Diizinkan</a>
+                <a href="/admin/unmapped-lids" class="nav-item {% if '/unmapped-lids' in request.url.path %}active{% endif %}">LID Belum Dipetakan</a>
                 <a href="/admin/history" class="nav-item {% if '/history' in request.url.path %}active{% endif %}">Riwayat Job</a>
                 <a href="/admin/settings" class="nav-item {% if '/settings' in request.url.path %}active{% endif %}">Pengaturan</a>
             </nav>
@@ -42,7 +43,7 @@
 
     <footer class="footer">
         <div class="footer-container">
-            <p>&copy; 2026 Farros TikTok Bot. Production-Ready WhatsApp & TikTok Gateway.</p>
+            <p>&copy; 2026 Farros Media Bot. Multi-Platform WhatsApp Downloader Gateway.</p>
         </div>
     </footer>
 
