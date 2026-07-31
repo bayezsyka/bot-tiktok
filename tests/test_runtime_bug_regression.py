@@ -9,7 +9,6 @@ from app.database.repositories import JobRepository
 from app.downloader.metadata import TikTokContentMetadata, TikTokMediaItemMetadata
 from app.downloader.service import DownloaderService
 from app.gateway.schemas import GatewayMessageResponse
-from app.queue.service import QueueService
 from app.queue.worker import QueueWorker
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -236,13 +235,10 @@ async def test_worker_does_not_mark_empty_items_as_send_failed(test_db: AsyncSes
         job_id = job.id
 
     worker = QueueWorker(session_maker)
-    async with session_maker() as session:
-        job_repo = JobRepository(session)
-        queue_service = QueueService(session)
-        job_to_send = await job_repo.get_by_id(job_id)
-        assert job_to_send is not None
 
-        await worker._send_all_media_items(job_to_send, session, queue_service)
+    with patch.object(worker.gateway, "send_text", new_callable=AsyncMock) as mock_send_text:
+        mock_send_text.return_value = GatewayMessageResponse(status="ok", message_id="wa-msg-fail")
+        await worker._send_all_media_items(job_id)
 
     async with session_maker() as session:
         job_repo = JobRepository(session)
@@ -357,17 +353,13 @@ async def test_existing_sent_item_not_duplicated_or_resent(test_db: AsyncSession
         assert reloaded_job.items[0].source_size_bytes == 500
 
     # Test _send_all_media_items doesn't resend sent item
+    with patch.object(worker.gateway, "send_media", new_callable=AsyncMock) as mock_send:
+        await worker._send_all_media_items(job_id)
+        mock_send.assert_not_called()
+
+    # Job should complete right away since all items are sent
     async with session_maker() as session:
         job_repo = JobRepository(session)
-        queue_service = QueueService(session)
-        reloaded_job = await job_repo.get_by_id(job_id)
-        assert reloaded_job is not None
-
-        with patch.object(worker.gateway, "send_media", new_callable=AsyncMock) as mock_send:
-            await worker._send_all_media_items(reloaded_job, session, queue_service)
-            mock_send.assert_not_called()
-
-        # Job should complete right away since all items are sent
         final_job = await job_repo.get_by_id(job_id)
         assert final_job is not None
         assert final_job.status == "sent"

@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.gateway.exceptions import (
     GatewayError,
     GatewayNetworkError,
+    GatewayRateLimitError,
     GatewayResponseError,
     GatewayTimeoutError,
 )
@@ -76,16 +77,24 @@ class FarrosWAGatewayClient:
                             method, url, headers=headers, json=json_data, data=data
                         )
 
+                    # Handle 429 immediately — raise typed error, never retry
+                    if response.status_code == 429:
+                        retry_after = _parse_retry_after(response)
+                        raise GatewayRateLimitError(
+                            retry_after=retry_after,
+                            message=response.text[:200],
+                        )
+
                     # Check for permanent 4xx errors (do not retry 400, 401, 403, 404, 409, 410, 413, 422, etc.)
                     if 400 <= response.status_code < 500:
-                        if response.status_code not in (408, 425, 429):
+                        if response.status_code not in (408, 425):
                             raise GatewayResponseError(
                                 status_code=response.status_code,
                                 message=response.text[:200],
                             )
 
-                    # Check for retryable HTTP errors (408, 425, 429, 5xx)
-                    if response.status_code in (408, 425, 429) or response.status_code >= 500:
+                    # Check for retryable HTTP errors (408, 425, 5xx)
+                    if response.status_code in (408, 425) or response.status_code >= 500:
                         if attempt >= max_retries:
                             raise GatewayResponseError(
                                 status_code=response.status_code,
@@ -123,7 +132,7 @@ class FarrosWAGatewayClient:
                     except Exception:
                         return GatewayMessageResponse(status="ok", http_status=response.status_code)
 
-            except GatewayResponseError:
+            except (GatewayResponseError, GatewayRateLimitError):
                 raise
             except httpx.TimeoutException as e:
                 if attempt >= max_retries:
@@ -240,3 +249,14 @@ class FarrosWAGatewayClient:
         except Exception as e:
             logger.error(f"Network error fetching session status: {e}")
             return {"status": "unavailable", "connected": False}
+
+
+def _parse_retry_after(response: httpx.Response) -> float | None:
+    """Parse Retry-After header, returning seconds as float or None."""
+    raw = response.headers.get("Retry-After") or response.headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return None

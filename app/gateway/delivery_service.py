@@ -43,6 +43,28 @@ class GatewayDeliveryService:
         """
         item.last_gateway_sync_at = utc_now()
 
+        # Detect SEND_RESULT_PENDING_TEMPORARY_ERROR:
+        #   q_status == "processing", error_code contains the marker,
+        #   and item already has a whatsapp/gateway message ID.
+        if (
+            q_status == "processing"
+            and error_code == "SEND_RESULT_PENDING_TEMPORARY_ERROR"
+            and item.gateway_message_id
+        ):
+            # Message was forwarded to WhatsApp but final result is unknown.
+            # Do NOT mark as failed. Do NOT resend.
+            if item.status not in ("completed", "failed", "cancelled"):
+                item.status = "delivery_unknown_pending"
+                item.gateway_queue_status = "processing"
+                item.gateway_error_code = error_code
+                item.gateway_error_message = (
+                    error_message
+                    or "Gateway sudah meneruskan pesan, tetapi hasil final dari WhatsApp belum diterima."
+                )
+            await self.db.flush()
+            await self.sync_job_status(item.job_id)
+            return
+
         # Handle Queue Status
         if q_status:
             if q_status == "failed":
@@ -142,6 +164,7 @@ class GatewayDeliveryService:
         queued_count = sum(1 for i in items if i.status == "gateway_queued")
         processing_count = sum(1 for i in items if i.status == "gateway_processing")
         unknown_count = sum(1 for i in items if i.status == "delivery_unknown")
+        unknown_pending_count = sum(1 for i in items if i.status == "delivery_unknown_pending")
         cancelled_count = sum(1 for i in items if i.status == "cancelled")
 
         job_stmt = select(DownloadJob).where(DownloadJob.id == job_id)
@@ -159,6 +182,8 @@ class GatewayDeliveryService:
             new_job_status = "cancelled"
         elif unknown_count > 0:
             new_job_status = "delivery_unknown"
+        elif unknown_pending_count > 0:
+            new_job_status = "delivery_unknown_pending"
         elif completed_count == total:
             new_job_status = "completed"
         elif failed_count == total:
