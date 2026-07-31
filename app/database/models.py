@@ -112,6 +112,7 @@ class DownloadItem(Base):
     gateway_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     gateway_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_gateway_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pending_since_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)

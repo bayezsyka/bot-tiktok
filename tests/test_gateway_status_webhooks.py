@@ -85,3 +85,61 @@ async def test_webhook_idempotency(client: AsyncClient, test_db: AsyncSession):
     # Status should still be 'completed' and 'delivered'
     assert item.gateway_delivery_status == "delivered"
     assert item.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_webhook_reads_last_error_message(client: AsyncClient, test_db: AsyncSession):
+    job = DownloadJob(
+        id="job_webhook_last_error",
+        status="gateway_queued",
+        sender_number="628123456789",
+        inbound_message_id="inbound-last-error",
+        webhook_event_id="wh-last-error",
+        original_url="http://example.com",
+    )
+    test_db.add(job)
+    item = DownloadItem(
+        job_id=job.id,
+        status="gateway_queued",
+        media_type="video",
+        gateway_message_id="msg-webhook-last-error",
+        gateway_queue_status="queued",
+    )
+    test_db.add(item)
+    await test_db.commit()
+
+    import hashlib
+    import hmac
+    import json
+    import time
+
+    payload = {
+        "event": "message.failed",
+        "data": {
+            "id": "msg-webhook-last-error",
+            "last_error_code": "SEND_FAILED",
+            "last_error_message": "Gateway production detail",
+        },
+    }
+    payload_bytes = json.dumps(payload).encode("utf-8")
+    timestamp = str(int(time.time()))
+    message = timestamp.encode("utf-8") + b"." + payload_bytes
+    signature = hmac.new(b"test-webhook-secret-123456", message, hashlib.sha256).hexdigest()
+
+    response = await client.post(
+        "/webhooks/farros-wa",
+        content=payload_bytes,
+        headers={
+            "X-FWAG-Event": "message.failed",
+            "X-FWAG-Event-Id": "wh-evt-last-error",
+            "X-FWAG-Timestamp": timestamp,
+            "X-FWAG-Signature": signature,
+            "Content-Type": "application/json",
+        },
+    )
+
+    assert response.status_code == 200
+    await test_db.refresh(item)
+    assert item.gateway_error_code == "SEND_FAILED"
+    assert item.gateway_error_message == "Gateway production detail"
+    assert item.error_message == "Gateway production detail"

@@ -62,8 +62,8 @@ async def _handle_outbound_status_event(db: AsyncSession, event_type: str, paylo
 
     q_status = None
     d_status = None
-    error_message = data.get("error_message") or data.get("error")
-    error_code = data.get("error_code") or data.get("code")
+    error_message = data.get("error_message") or data.get("last_error_message") or data.get("error")
+    error_code = data.get("error_code") or data.get("last_error_code") or data.get("code")
 
     if event_type == "message.sent":
         q_status = "sent"

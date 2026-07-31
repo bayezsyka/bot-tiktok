@@ -1,13 +1,24 @@
 import asyncio
 import logging
 import os
-
 from typing import TypedDict
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
-from app.database.models import DownloadJob, utc_now
+from app.database.models import DownloadItem, DownloadJob, utc_now
 from app.database.repositories import JobRepository
+from app.downloader.dtos import (
+    DownloadedContentResult,
+    ExtractedMetadataResult,
+    ItemProcessingSnapshot,
+    JobDownloadSnapshot,
+    MissingLocalFile,
+    ProcessedJobResult,
+    ProcessingSnapshot,
+)
 from app.downloader.exceptions import (
     ContentNotSupportedError,
     DownloadError,
@@ -97,6 +108,209 @@ class QueueWorker:
                 await session.flush()
                 return job.id
 
+    async def _load_job_download_snapshot(self, job_id: str) -> tuple[JobDownloadSnapshot, int, str, str] | None:
+        async with self.session_maker() as session:
+            stmt = (
+                select(DownloadJob)
+                .options(selectinload(DownloadJob.items))
+                .where(DownloadJob.id == job_id)
+            )
+            result = await session.execute(stmt)
+            job = result.scalar_one_or_none()
+            if not job:
+                return None
+
+            items = tuple(
+                ItemProcessingSnapshot(
+                    id=item.id,
+                    position=item.position,
+                    media_type=item.media_type,
+                    status=item.status,
+                    gateway_message_id=item.gateway_message_id,
+                    local_filename=item.local_filename,
+                    source_size_bytes=item.source_size_bytes,
+                    final_size_bytes=item.final_size_bytes,
+                    source_url=item.source_url,
+                )
+                for item in (job.items or [])
+            )
+            snapshot = JobDownloadSnapshot(
+                id=job.id,
+                original_url=job.original_url,
+                canonical_url=job.canonical_url,
+                platform=job.platform or "tiktok",
+                items=items,
+            )
+            return snapshot, job.attempt_count, job.sender_number, job.inbound_message_id
+
+    async def _save_extracted_metadata(
+        self, job_id: str, result: ExtractedMetadataResult
+    ) -> None:
+        async with self.session_maker() as session:
+            async with session.begin():
+                stmt = (
+                    select(DownloadJob)
+                    .options(selectinload(DownloadJob.items))
+                    .where(DownloadJob.id == job_id)
+                )
+                query_result = await session.execute(stmt)
+                job = query_result.scalar_one_or_none()
+                if not job:
+                    return
+
+                metadata = result.metadata
+                job.canonical_url = result.canonical_url
+                job.content_type = metadata.content_type
+                job.media_count = len(metadata.items)
+                job.duration_seconds = metadata.duration_seconds
+                job.updated_at = utc_now()
+
+                existing_items = {item.position: item for item in (job.items or [])}
+                for item_meta in metadata.items:
+                    db_item = existing_items.get(item_meta.position)
+                    if db_item:
+                        if db_item.status != "sent" and not db_item.gateway_message_id:
+                            db_item.media_type = item_meta.media_type
+                            db_item.source_url = item_meta.source_url
+                            db_item.updated_at = utc_now()
+                    else:
+                        item = DownloadItem(
+                            job_id=job.id,
+                            position=item_meta.position,
+                            media_type=item_meta.media_type,
+                            status="pending",
+                            source_url=item_meta.source_url,
+                        )
+                        session.add(item)
+
+    async def _save_downloaded_results(
+        self, job_id: str, result: DownloadedContentResult
+    ) -> None:
+        async with self.session_maker() as session:
+            async with session.begin():
+                stmt = (
+                    select(DownloadJob)
+                    .options(selectinload(DownloadJob.items))
+                    .where(DownloadJob.id == job_id)
+                )
+                query_result = await session.execute(stmt)
+                job = query_result.scalar_one_or_none()
+                if not job:
+                    return
+
+                existing_items = {item.position: item for item in (job.items or [])}
+                for item_result in result.items:
+                    db_item = existing_items.get(item_result.position)
+                    if not db_item:
+                        db_item = DownloadItem(
+                            job_id=job.id,
+                            position=item_result.position,
+                            media_type=item_result.media_type,
+                            status="pending",
+                            source_url=item_result.source_url,
+                        )
+                        session.add(db_item)
+                        existing_items[item_result.position] = db_item
+
+                    if db_item.status == "sent" or db_item.gateway_message_id:
+                        continue
+
+                    db_item.media_type = item_result.media_type
+                    db_item.source_url = item_result.source_url
+                    db_item.local_filename = item_result.local_filename
+                    db_item.source_size_bytes = item_result.source_size_bytes
+                    db_item.updated_at = utc_now()
+
+                job.source_size_bytes = result.source_size_bytes
+                job.updated_at = utc_now()
+
+    async def _load_processing_snapshot(self, job_id: str) -> ProcessingSnapshot | None:
+        async with self.session_maker() as session:
+            stmt = (
+                select(DownloadJob)
+                .options(selectinload(DownloadJob.items))
+                .where(DownloadJob.id == job_id)
+            )
+            result = await session.execute(stmt)
+            job = result.scalar_one_or_none()
+            if not job:
+                return None
+
+            item_snapshots = tuple(
+                ItemProcessingSnapshot(
+                    id=item.id,
+                    position=item.position,
+                    media_type=item.media_type,
+                    status=item.status,
+                    gateway_message_id=item.gateway_message_id,
+                    local_filename=item.local_filename,
+                    source_size_bytes=item.source_size_bytes,
+                    final_size_bytes=item.final_size_bytes,
+                    source_url=item.source_url,
+                )
+                for item in (job.items or [])
+            )
+            missing = tuple(
+                MissingLocalFile(item_id=item.id, position=item.position)
+                for item in item_snapshots
+                if item.status != "sent"
+                and not item.gateway_message_id
+                and (not item.local_filename or not os.path.exists(item.local_filename))
+            )
+            return ProcessingSnapshot(
+                job_id=job.id,
+                media_count=job.media_count,
+                items=item_snapshots,
+                missing_local_files=missing,
+            )
+
+    async def _mark_items_processing(self, snapshot: ProcessingSnapshot) -> None:
+        item_ids = [
+            item.id
+            for item in snapshot.items
+            if item.status != "sent" and not item.gateway_message_id and item.local_filename
+        ]
+        if not item_ids:
+            return
+
+        async with self.session_maker() as session:
+            async with session.begin():
+                stmt = select(DownloadItem).where(DownloadItem.id.in_(item_ids))
+                result = await session.execute(stmt)
+                for item in result.scalars().all():
+                    if item.status != "sent" and not item.gateway_message_id:
+                        item.status = "processing"
+                        item.updated_at = utc_now()
+
+    async def _save_processed_results(
+        self, job_id: str, result: ProcessedJobResult
+    ) -> None:
+        async with self.session_maker() as session:
+            async with session.begin():
+                job = await session.get(DownloadJob, job_id)
+                if not job:
+                    return
+
+                result_by_id = {item.item_id: item for item in result.items}
+                if result_by_id:
+                    stmt = select(DownloadItem).where(DownloadItem.id.in_(result_by_id.keys()))
+                    item_result = await session.execute(stmt)
+                    for item in item_result.scalars().all():
+                        processed = result_by_id[item.id]
+                        if item.status == "sent" or item.gateway_message_id:
+                            continue
+                        item.status = processed.status
+                        if processed.local_filename is not None:
+                            item.local_filename = processed.local_filename
+                        if processed.final_size_bytes is not None:
+                            item.final_size_bytes = processed.final_size_bytes
+                        if processed.error_message is not None:
+                            item.error_message = processed.error_message
+                        item.updated_at = utc_now()
+
+                job.final_size_bytes = result.final_size_bytes
+                job.updated_at = utc_now()
+
     async def _send_failure_notification(
         self, job_id: str, sender_number: str, inbound_message_id: str,
         custom_message: str | None = None
@@ -123,188 +337,109 @@ class QueueWorker:
         job_dir = None
         try:
             job_dir = create_job_temp_dir(job_id)
-
-            # ==========================================
-            # PHASE 1: EXTRACTION (short session)
-            # ==========================================
             attempt_count = 0
             sender_number = ""
             inbound_message_id = ""
-            provider = None
-            metadata = None
+
+            downloader = DownloaderService()
+
+            extraction_snapshot = await self._load_job_download_snapshot(job_id)
+            if not extraction_snapshot:
+                return
+            job_snapshot, attempt_count, sender_number, inbound_message_id = extraction_snapshot
 
             try:
-                async with self.session_maker() as session:
-                    try:
-                        job_repo = JobRepository(session)
-                        downloader = DownloaderService(session)
-
-                        job = await job_repo.get_by_id(job_id)
-                        if not job:
-                            return
-
-                        attempt_count = job.attempt_count
-                        sender_number = job.sender_number
-                        inbound_message_id = job.inbound_message_id
-
-                        provider, metadata = await downloader.extract_and_prepare_job(job, job_dir)
-                        await session.commit()
-                    except (ContentNotSupportedError, DownloadSizeLimitExceededError) as e:
-                        logger.warning(f"[Stage: Extraction] Permanent error during extraction for job {job_id}: {e.message}")
-                        try:
-                            await session.rollback()
-                        except Exception:
-                            pass
-                        await self._update_job_status_safe(
-                            job_id, "failed",
-                            error_code="UNSUPPORTED_CONTENT",
-                            error_message=e.user_friendly_message
-                        )
-                        await self._send_failure_notification(
-                            job_id, sender_number, inbound_message_id, e.user_friendly_message
-                        )
-                        return
-                    except (DownloadTimeoutError, DownloadError, Exception) as e:
-                        logger.error(f"[Stage: Extraction] Extraction error on job {job_id}: {e}")
-                        try:
-                            await session.rollback()
-                        except Exception:
-                            pass
-                        user_msg = getattr(e, "user_friendly_message", None)
-                        await self._handle_job_error(job_id, str(e), attempt_count, user_msg)
-                        return
-            except Exception as e:
-                logger.error(f"[Stage: Extraction] Session error on job {job_id}: {e}")
-                await self._handle_job_error(job_id, str(e), attempt_count)
+                extracted = await downloader.extract_metadata(job_snapshot, job_dir)
+                await self._save_extracted_metadata(job_id, extracted)
+            except (ContentNotSupportedError, DownloadSizeLimitExceededError) as e:
+                logger.warning(f"[Stage: Extraction] Permanent error during extraction for job {job_id}: {e.message}")
+                await self._update_job_status_safe(
+                    job_id, "failed",
+                    error_code="UNSUPPORTED_CONTENT",
+                    error_message=e.user_friendly_message,
+                )
+                await self._send_failure_notification(
+                    job_id, sender_number, inbound_message_id, e.user_friendly_message
+                )
+                return
+            except (DownloadTimeoutError, DownloadError, Exception) as e:
+                logger.error(f"[Stage: Extraction] Extraction error on job {job_id}: {e}")
+                user_msg = getattr(e, "user_friendly_message", None)
+                await self._handle_job_error(job_id, str(e), attempt_count, user_msg)
                 return
 
-            # ==========================================
-            # PHASE 2: DOWNLOADING (session for status + external process + session for results)
-            # ==========================================
             try:
                 await self._update_job_status_safe(job_id, "downloading")
+                download_snapshot = await self._load_job_download_snapshot(job_id)
+                if not download_snapshot:
+                    return
+                job_snapshot, attempt_count, sender_number, inbound_message_id = download_snapshot
+                downloaded = await downloader.download_content(
+                    job_snapshot,
+                    extracted.provider,
+                    extracted.metadata,
+                    job_dir,
+                )
+                await self._save_downloaded_results(job_id, downloaded)
+            except (ContentNotSupportedError, DownloadSizeLimitExceededError) as e:
+                logger.warning(f"[Stage: Download] Size exceeded on job {job_id}: {e.message}")
+                await self._update_job_status_safe(
+                    job_id, "failed",
+                    error_code="SIZE_EXCEEDED",
+                    error_message=e.user_friendly_message,
+                )
+                await self._send_failure_notification(
+                    job_id, sender_number, inbound_message_id, e.user_friendly_message
+                )
+                return
             except Exception as e:
-                logger.error(f"[Stage: Download] Status update failed for job {job_id}: {e}")
-                await self._handle_job_error(job_id, str(e), attempt_count)
+                logger.error(f"[Stage: Download] Download error on job {job_id}: {e}")
+                user_msg = getattr(e, "user_friendly_message", None)
+                await self._handle_job_error(job_id, str(e), attempt_count, user_msg)
                 return
 
-            try:
-                async with self.session_maker() as session:
-                    try:
-                        job_repo = JobRepository(session)
-                        downloader = DownloaderService(session)
-                        job = await job_repo.get_by_id(job_id)
-                        if not job:
-                            return
-                        attempt_count = job.attempt_count
-
-                        await downloader.download_job_content(job, provider, metadata, job_dir)
-                        await session.commit()
-                    except (ContentNotSupportedError, DownloadSizeLimitExceededError) as e:
-                        logger.warning(f"[Stage: Download] Size exceeded on job {job_id}: {e.message}")
-                        try:
-                            await session.rollback()
-                        except Exception:
-                            pass
-                        await self._update_job_status_safe(
-                            job_id, "failed",
-                            error_code="SIZE_EXCEEDED",
-                            error_message=e.user_friendly_message
-                        )
-                        await self._send_failure_notification(
-                            job_id, sender_number, inbound_message_id, e.user_friendly_message
-                        )
-                        return
-                    except Exception as e:
-                        logger.error(f"[Stage: Download] Download error on job {job_id}: {e}")
-                        try:
-                            await session.rollback()
-                        except Exception:
-                            pass
-                        user_msg = getattr(e, "user_friendly_message", None)
-                        await self._handle_job_error(job_id, str(e), attempt_count, user_msg)
-                        return
-            except Exception as e:
-                logger.error(f"[Stage: Download] Session error on job {job_id}: {e}")
-                await self._handle_job_error(job_id, str(e), attempt_count)
+            processing_snapshot = await self._load_processing_snapshot(job_id)
+            if not processing_snapshot:
+                return
+            if not processing_snapshot.items or (
+                processing_snapshot.media_count
+                and len(processing_snapshot.items) != processing_snapshot.media_count
+            ):
+                logger.error(
+                    f"[Stage: Download] Job {job_id} item count mismatch before processing. "
+                    f"Items: {len(processing_snapshot.items)}, expected: {processing_snapshot.media_count}"
+                )
+                await self._update_job_status_safe(
+                    job_id,
+                    "failed",
+                    error_code="INTERNAL_STATE_ERROR",
+                    error_message="Jumlah item unduhan tidak sesuai dengan metadata.",
+                )
+                await self._send_failure_notification(job_id, sender_number, inbound_message_id)
                 return
 
-            # ==========================================
-            # VALIDATE FILES (short session)
-            # ==========================================
-            try:
-                async with self.session_maker() as session:
-                    job_repo = JobRepository(session)
-                    job = await job_repo.get_by_id(job_id)
-                    if not job:
-                        return
-
-                    items = list(job.items) if job.items else []
-                    if not items or (job.media_count and len(items) != job.media_count):
-                        logger.error(f"[Stage: Download] Job {job_id} item count mismatch before processing. Items: {len(items)}, expected: {job.media_count}")
-                        queue_service = QueueService(session)
-                        await queue_service.update_job_status(
-                            job_id, "failed", error_code="INTERNAL_STATE_ERROR", error_message="Jumlah item unduhan tidak sesuai dengan metadata."
-                        )
-                        await session.commit()
-                        await self._send_failure_notification(job_id, sender_number, inbound_message_id)
-                        return
-
-                    invalid_items = [
-                        item for item in items
-                        if item.status != "sent" and not item.gateway_message_id and (not item.local_filename or not os.path.exists(item.local_filename))
-                    ]
-                    if invalid_items:
-                        logger.error(f"[Stage: Download] Job {job_id} has items without valid local_filename before processing.")
-                        queue_service = QueueService(session)
-                        await queue_service.update_job_status(
-                            job_id, "failed", error_code="DOWNLOAD_FAILED", error_message="File media lokal tidak ditemukan atau rusak."
-                        )
-                        await session.commit()
-                        await self._send_failure_notification(job_id, sender_number, inbound_message_id)
-                        return
-            except Exception as e:
-                logger.error(f"[Stage: Validation] Error validating job {job_id}: {e}")
-                await self._handle_job_error(job_id, str(e), attempt_count)
+            if processing_snapshot.missing_local_files:
+                logger.error(f"[Stage: Download] Job {job_id} has items without valid local_filename before processing.")
+                await self._update_job_status_safe(
+                    job_id,
+                    "failed",
+                    error_code="DOWNLOAD_FAILED",
+                    error_message="File media lokal tidak ditemukan atau rusak.",
+                )
+                await self._send_failure_notification(job_id, sender_number, inbound_message_id)
                 return
 
-            # ==========================================
-            # PHASE 3: MEDIA PROCESSING (session for status + external process + session for results)
-            # ==========================================
             try:
                 await self._update_job_status_safe(job_id, "processing")
+                await self._mark_items_processing(processing_snapshot)
+                media_processor = MediaProcessor()
+                processed = await media_processor.process_job_media(processing_snapshot.items, job_dir)
+                await self._save_processed_results(job_id, processed)
             except Exception as e:
-                logger.error(f"[Stage: Processing] Status update failed for job {job_id}: {e}")
+                logger.error(f"[Stage: Processing] Processing error on job {job_id}: {e}")
                 await self._handle_job_error(job_id, str(e), attempt_count)
                 return
 
-            try:
-                async with self.session_maker() as session:
-                    try:
-                        job_repo = JobRepository(session)
-                        media_processor = MediaProcessor(session)
-                        job = await job_repo.get_by_id(job_id)
-                        if not job:
-                            return
-
-                        await media_processor.process_job_media(job, job_dir)
-                        await session.commit()
-                    except Exception as e:
-                        logger.error(f"[Stage: Processing] Processing error on job {job_id}: {e}")
-                        try:
-                            await session.rollback()
-                        except Exception:
-                            pass
-                        await self._handle_job_error(job_id, str(e), attempt_count)
-                        return
-            except Exception as e:
-                logger.error(f"[Stage: Processing] Session error on job {job_id}: {e}")
-                await self._handle_job_error(job_id, str(e), attempt_count)
-                return
-
-            # ==========================================
-            # PHASE 4: SENDING (session for status + per-item sends)
-            # ==========================================
             try:
                 await self._update_job_status_safe(job_id, "sending")
             except Exception as e:
@@ -487,6 +622,7 @@ class QueueWorker:
             async with self.session_maker() as session:
                 try:
                     from sqlalchemy import select
+
                     from app.database.models import DownloadJob
                     stmt3 = select(DownloadJob).where(DownloadJob.id == job_id)
                     result3 = await session.execute(stmt3)
@@ -560,14 +696,44 @@ class QueueWorker:
     async def _handle_job_error(
         self, job_id: str, error_msg: str, attempt_count: int, user_friendly_message: str | None = None
     ) -> None:
-        """Handle job error using a FRESH session.  Never reuses a broken session."""
+        """Handle job error without holding a DB session during retry backoff."""
+        if attempt_count < self.settings.MAX_JOB_RETRIES:
+            backoff_sec = float(2 ** attempt_count * 5)
+            logger.info(f"Transient error on job {job_id}. Requeuing with {backoff_sec}s backoff. Error: {error_msg}")
+            await asyncio.sleep(backoff_sec)
+
+            try:
+                async with self.session_maker() as recovery_session:
+                    try:
+                        stmt = select(DownloadJob).where(DownloadJob.id == job_id)
+                        result = await recovery_session.execute(stmt)
+                        job = result.scalar_one_or_none()
+                        if not job:
+                            return
+                        if job.status in ("completed", "failed", "cancelled", "sent", "gateway_queued", "gateway_processing"):
+                            logger.info(f"Skipping retry update for job {job_id}; current status is {job.status}.")
+                            return
+
+                        queue_service = QueueService(recovery_session)
+                        await queue_service.update_job_status(
+                            job_id, "queued", error_code="RETRY_SCHEDULED", error_message=error_msg[:300]
+                        )
+                        await recovery_session.commit()
+                    except Exception as inner_exc:
+                        try:
+                            await recovery_session.rollback()
+                        except Exception:
+                            pass
+                        logger.error(f"Recovery handler failed for job {job_id}: {inner_exc}")
+            except Exception as outer_exc:
+                logger.error(f"Recovery session creation failed for job {job_id}: {outer_exc}")
+            return
+
         try:
             async with self.session_maker() as recovery_session:
                 try:
                     queue_service = QueueService(recovery_session)
 
-                    # Load job to get sender info for failure notification
-                    from sqlalchemy import select
                     stmt = select(DownloadJob).where(DownloadJob.id == job_id)
                     result = await recovery_session.execute(stmt)
                     job = result.scalar_one_or_none()
@@ -575,24 +741,14 @@ class QueueWorker:
                     sender_number = job.sender_number if job else ""
                     inbound_message_id = job.inbound_message_id if job else ""
 
-                    if attempt_count < self.settings.MAX_JOB_RETRIES:
-                        # Requeue with backoff
-                        backoff_sec = float(2 ** attempt_count * 5)
-                        logger.info(f"Transient error on job {job_id}. Requeuing with {backoff_sec}s backoff. Error: {error_msg}")
-                        await asyncio.sleep(backoff_sec)
-                        await queue_service.update_job_status(
-                            job_id, "queued", error_code="RETRY_SCHEDULED", error_message=error_msg[:300]
-                        )
-                    else:
-                        logger.warning(f"Job {job_id} failed permanently after {attempt_count} attempts. Error: {error_msg}")
-                        await queue_service.update_job_status(
-                            job_id, "failed", error_code="MAX_RETRIES_EXCEEDED", error_message=error_msg[:300]
-                        )
+                    logger.warning(f"Job {job_id} failed permanently after {attempt_count} attempts. Error: {error_msg}")
+                    await queue_service.update_job_status(
+                        job_id, "failed", error_code="MAX_RETRIES_EXCEEDED", error_message=error_msg[:300]
+                    )
 
                     await recovery_session.commit()
 
-                    # Send failure notification outside the transaction
-                    if attempt_count >= self.settings.MAX_JOB_RETRIES and sender_number:
+                    if sender_number:
                         await self._send_failure_notification(
                             job_id, sender_number, inbound_message_id, user_friendly_message
                         )

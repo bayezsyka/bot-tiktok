@@ -2,10 +2,12 @@ import logging
 import os
 from pathlib import Path
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.config import get_settings
-from app.database.models import DownloadJob
+from app.downloader.dtos import (
+    ItemProcessingSnapshot,
+    ProcessedItemResult,
+    ProcessedJobResult,
+)
 from app.media.ffmpeg import (
     calculate_target_bitrate_kbps,
     compress_video,
@@ -18,31 +20,35 @@ logger = logging.getLogger(__name__)
 
 
 class MediaProcessor:
-    def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+    def __init__(self) -> None:
         self.settings = get_settings()
 
-    async def process_job_media(self, job: DownloadJob, job_dir: Path) -> None:
+    async def process_job_media(
+        self, items: tuple[ItemProcessingSnapshot, ...], job_dir: Path
+    ) -> ProcessedJobResult:
         """
         Inspect and process all media items for a job.
         Ensures each item meets formatting compatibility and fits within MAX_MEDIA_MB limit.
         """
         max_bytes = self.settings.MAX_MEDIA_MB * 1024 * 1024
         total_final_size = 0
+        results: list[ProcessedItemResult] = []
 
-        for item in job.items:
+        for item in items:
             if item.status == "sent" or item.gateway_message_id:
                 if item.local_filename and os.path.exists(item.local_filename):
                     total_final_size += os.path.getsize(item.local_filename)
                 continue
 
             if not item.local_filename or not os.path.exists(item.local_filename):
-                item.status = "failed"
-                item.error_message = "File fisik hasil download tidak ditemukan"
+                results.append(
+                    ProcessedItemResult(
+                        item_id=item.id,
+                        status="failed",
+                        error_message="File fisik hasil download tidak ditemukan",
+                    )
+                )
                 continue
-
-            item.status = "processing"
-            await self.session.flush()
 
             source_path = item.local_filename
             file_size = os.path.getsize(source_path)
@@ -55,19 +61,33 @@ class MediaProcessor:
             if processed_path and os.path.exists(processed_path):
                 final_size = os.path.getsize(processed_path)
                 if final_size > max_bytes:
-                    item.status = "failed"
-                    item.error_message = f"Ukuran media akhir ({final_size // (1024*1024)}MB) melebihi batas {self.settings.MAX_MEDIA_MB}MB"
+                    results.append(
+                        ProcessedItemResult(
+                            item_id=item.id,
+                            status="failed",
+                            error_message=f"Ukuran media akhir ({final_size // (1024*1024)}MB) melebihi batas {self.settings.MAX_MEDIA_MB}MB",
+                        )
+                    )
                 else:
-                    item.local_filename = processed_path
-                    item.final_size_bytes = final_size
-                    item.status = "pending"  # ready for sending
                     total_final_size += final_size
+                    results.append(
+                        ProcessedItemResult(
+                            item_id=item.id,
+                            status="pending",
+                            local_filename=processed_path,
+                            final_size_bytes=final_size,
+                        )
+                    )
             else:
-                item.status = "failed"
-                item.error_message = "Gagal memproses media agar kompatibel dan di bawah batas ukuran"
+                results.append(
+                    ProcessedItemResult(
+                        item_id=item.id,
+                        status="failed",
+                        error_message="Gagal memproses media agar kompatibel dan di bawah batas ukuran",
+                    )
+                )
 
-        job.final_size_bytes = total_final_size
-        await self.session.flush()
+        return ProcessedJobResult(items=tuple(results), final_size_bytes=total_final_size)
 
     async def _process_video_item(
         self, source_path: str, file_size: int, max_bytes: int, job_dir: Path

@@ -1,11 +1,17 @@
 import os
 import tempfile
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.database.models import DownloadItem
 from app.database.repositories import JobRepository
+from app.downloader.dtos import (
+    DownloadedContentResult,
+    DownloadedItemResult,
+    ExtractedMetadataResult,
+    ProcessedItemResult,
+    ProcessedJobResult,
+)
 from app.downloader.metadata import TikTokContentMetadata, TikTokMediaItemMetadata
 from app.downloader.service import DownloaderService
 from app.gateway.schemas import GatewayMessageResponse
@@ -30,7 +36,6 @@ async def test_extract_new_item_is_attached_to_job_relationship(test_db: AsyncSe
         # Job items should be initially empty
         assert len(job.items) == 0
 
-        downloader = DownloaderService(session)
         dummy_meta = TikTokContentMetadata(
             content_type="video",
             title="Test Video",
@@ -39,16 +44,22 @@ async def test_extract_new_item_is_attached_to_job_relationship(test_db: AsyncSe
             items=[TikTokMediaItemMetadata(position=1, source_url="http://src/video.mp4", media_type="video")],
         )
 
-        with patch.object(downloader.yt_dlp, "extract_metadata", new_callable=AsyncMock) as mock_extract:
-            mock_extract.return_value = dummy_meta
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                await downloader.extract_and_prepare_job(job, Path(tmp_dir))
+        worker = QueueWorker(session_maker)
+        await worker._save_extracted_metadata(
+            job.id,
+            ExtractedMetadataResult(
+                canonical_url=job.canonical_url or job.original_url,
+                provider=DownloaderService().yt_dlp,
+                metadata=dummy_meta,
+            ),
+        )
 
-        # Without reloading, job.items must now contain the newly created DownloadItem
-        assert len(job.items) == 1
-        assert job.items[0].position == 1
-        assert job.items[0].media_type == "video"
-        assert job.items[0].status == "pending"
+        reloaded_job = await job_repo.get_by_id(job.id)
+        assert reloaded_job is not None
+        assert len(reloaded_job.items) == 1
+        assert reloaded_job.items[0].position == 1
+        assert reloaded_job.items[0].media_type == "video"
+        assert reloaded_job.items[0].status == "pending"
 
 
 @pytest.mark.asyncio
@@ -68,7 +79,7 @@ async def test_download_updates_new_item_in_same_session(test_db: AsyncSession) 
                 original_url="https://www.tiktok.com/@creator/video/22222",
                 canonical_url="https://www.tiktok.com/@creator/video/22222",
             )
-            downloader = DownloaderService(session)
+            await session.commit()
             dummy_meta = TikTokContentMetadata(
                 content_type="video",
                 title="Test Video",
@@ -76,31 +87,36 @@ async def test_download_updates_new_item_in_same_session(test_db: AsyncSession) 
                 duration_seconds=15,
                 items=[TikTokMediaItemMetadata(position=1, source_url="http://src/video.mp4", media_type="video")],
             )
-            with patch.object(downloader.yt_dlp, "extract_metadata", new_callable=AsyncMock) as mock_extract:
-                mock_extract.return_value = dummy_meta
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    provider, metadata = await downloader.extract_and_prepare_job(job, Path(tmp_dir))
-            await session.commit()
+            worker = QueueWorker(session_maker)
+            await worker._save_extracted_metadata(
+                job.id,
+                ExtractedMetadataResult(
+                    canonical_url=job.canonical_url or job.original_url,
+                    provider=DownloaderService().yt_dlp,
+                    metadata=dummy_meta,
+                ),
+            )
+            await worker._save_downloaded_results(
+                job.id,
+                DownloadedContentResult(
+                    items=(
+                        DownloadedItemResult(
+                            position=1,
+                            source_url="http://src/video.mp4",
+                            media_type="video",
+                            local_filename=dummy_file.name,
+                            source_size_bytes=os.path.getsize(dummy_file.name),
+                        ),
+                    ),
+                    source_size_bytes=os.path.getsize(dummy_file.name),
+                ),
+            )
 
-            # Reload using JobRepository.get_by_id in the same session with expire_on_commit=False
+        async with session_maker() as session:
+            job_repo = JobRepository(session)
             reloaded_job = await job_repo.get_by_id(job.id)
             assert reloaded_job is not None
             assert len(reloaded_job.items) == 1
-
-            # Download provider yields local_path
-            mock_provider = MagicMock()
-            updated_meta = TikTokContentMetadata(
-                content_type="video",
-                title="Test Video",
-                author="Creator",
-                duration_seconds=15,
-                items=[TikTokMediaItemMetadata(position=1, source_url="http://src/video.mp4", media_type="video", local_path=dummy_file.name)],
-            )
-            mock_provider.download_content = AsyncMock(return_value=updated_meta)
-
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                await downloader.download_job_content(reloaded_job, mock_provider, metadata, Path(tmp_dir))
-
             assert reloaded_job.items[0].local_filename == dummy_file.name
             assert reloaded_job.items[0].source_size_bytes is not None and reloaded_job.items[0].source_size_bytes > 0
             assert reloaded_job.source_size_bytes is not None and reloaded_job.source_size_bytes > 0
@@ -191,11 +207,19 @@ async def test_worker_full_video_pipeline_calls_gateway(test_db: AsyncSession) -
              patch("app.downloader.service.YtDlpProvider.download_content", new_callable=AsyncMock, return_value=downloaded_meta), \
              patch("app.media.processor.MediaProcessor.process_job_media", new_callable=AsyncMock) as mock_proc:
 
-            async def fake_proc(job_obj, job_dir):
-                for item in job_obj.items:
-                    item.status = "pending"
-                    item.local_filename = dummy_file.name
-                    item.final_size_bytes = 100
+            async def fake_proc(items, job_dir):
+                return ProcessedJobResult(
+                    items=tuple(
+                        ProcessedItemResult(
+                            item_id=item.id,
+                            status="pending",
+                            local_filename=dummy_file.name,
+                            final_size_bytes=100,
+                        )
+                        for item in items
+                    ),
+                    final_size_bytes=100,
+                )
 
             mock_proc.side_effect = fake_proc
             mock_send.return_value = GatewayMessageResponse(status="ok", message_id="wa-msg-reg-d")
@@ -276,10 +300,16 @@ async def test_missing_local_filename_is_not_classified_as_gateway_failure(test_
 
     worker = QueueWorker(session_maker)
 
-    mock_provider = MagicMock()
-    mock_meta = MagicMock()
-    with patch("app.downloader.service.DownloaderService.extract_and_prepare_job", new_callable=AsyncMock, return_value=(mock_provider, mock_meta)), \
-         patch("app.downloader.service.DownloaderService.download_job_content", new_callable=AsyncMock), \
+    fake_meta = TikTokContentMetadata(
+        content_type="video",
+        title="Test",
+        author="Creator",
+        duration_seconds=10,
+        items=[TikTokMediaItemMetadata(position=1, source_url="http://src/video.mp4", media_type="video")],
+    )
+
+    with patch("app.downloader.service.YtDlpProvider.extract_metadata", new_callable=AsyncMock, return_value=fake_meta), \
+         patch("app.downloader.service.DownloaderService.download_content", new_callable=AsyncMock, return_value=DownloadedContentResult(items=(), source_size_bytes=0)), \
          patch.object(worker.gateway, "send_media", new_callable=AsyncMock) as mock_send, \
          patch.object(worker.gateway, "send_text", new_callable=AsyncMock) as mock_send_text:
         mock_send_text.return_value = GatewayMessageResponse(status="ok", message_id="wa-msg-fail")
@@ -329,12 +359,11 @@ async def test_existing_sent_item_not_duplicated_or_resent(test_db: AsyncSession
 
     worker = QueueWorker(session_maker)
 
-    # Test extract_and_prepare_job doesn't duplicate position 1 or reset sent state
+    # Test metadata persistence doesn't duplicate position 1 or reset sent state
     async with session_maker() as session:
         job_repo = JobRepository(session)
         reloaded_job = await job_repo.get_by_id(job_id)
         assert reloaded_job is not None
-        downloader = DownloaderService(session)
         dummy_meta = TikTokContentMetadata(
             content_type="video",
             title="Test Video",
@@ -342,11 +371,17 @@ async def test_existing_sent_item_not_duplicated_or_resent(test_db: AsyncSession
             duration_seconds=15,
             items=[TikTokMediaItemMetadata(position=1, source_url="http://new_src/video.mp4", media_type="video")],
         )
-        with patch.object(downloader.yt_dlp, "extract_metadata", new_callable=AsyncMock) as mock_extract:
-            mock_extract.return_value = dummy_meta
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                await downloader.extract_and_prepare_job(reloaded_job, Path(tmp_dir))
+        await worker._save_extracted_metadata(
+            job_id,
+            ExtractedMetadataResult(
+                canonical_url=reloaded_job.canonical_url or reloaded_job.original_url,
+                provider=DownloaderService().yt_dlp,
+                metadata=dummy_meta,
+            ),
+        )
 
+        reloaded_job = await job_repo.get_by_id(job_id)
+        assert reloaded_job is not None
         assert len(reloaded_job.items) == 1
         assert reloaded_job.items[0].status == "sent"
         assert reloaded_job.items[0].gateway_message_id == "old-gateway-msg-id-123"

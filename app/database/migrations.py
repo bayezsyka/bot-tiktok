@@ -50,6 +50,9 @@ async def init_db(engine: AsyncEngine) -> None:
             await conn.execute(text("ALTER TABLE download_items ADD COLUMN gateway_read_at DATETIME;"))
             await conn.execute(text("ALTER TABLE download_items ADD COLUMN gateway_failed_at DATETIME;"))
             await conn.execute(text("ALTER TABLE download_items ADD COLUMN last_gateway_sync_at DATETIME;"))
+        if "pending_since_at" not in item_columns:
+            logger.info("Migrating schema: Adding pending_since_at column to download_items")
+            await conn.execute(text("ALTER TABLE download_items ADD COLUMN pending_since_at DATETIME;"))
 
         result = await conn.execute(text("PRAGMA table_info(download_jobs);"))
         job_columns = [row[1] for row in result.fetchall()]
@@ -75,6 +78,7 @@ async def init_db(engine: AsyncEngine) -> None:
             "003_add_platform_to_download_jobs",
             "004_add_gateway_delivery_fields",
             "005_add_gateway_message_id_index",
+            "006_add_pending_since_at",
         ]
         for version in migrations:
             await conn.execute(

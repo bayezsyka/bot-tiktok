@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.database.repositories import JobRepository
+from app.downloader.dtos import JobDownloadSnapshot
 from app.downloader.metadata import TikTokContentMetadata, TikTokMediaItemMetadata
 from app.downloader.service import DownloaderService
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +27,7 @@ async def test_downloader_service_resolves_canonical_url_in_worker(test_db: Asyn
     assert refetched_job is not None
 
 
-    downloader = DownloaderService(test_db)
+    downloader = DownloaderService()
     dummy_meta = TikTokContentMetadata(
         content_type="video",
         title="Test Video",
@@ -41,8 +42,17 @@ async def test_downloader_service_resolves_canonical_url_in_worker(test_db: Asyn
         mock_extract.return_value = dummy_meta
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            provider, meta = await downloader.extract_and_prepare_job(refetched_job, Path(tmp_dir))
+            result = await downloader.extract_metadata(
+                JobDownloadSnapshot(
+                    id=refetched_job.id,
+                    original_url=refetched_job.original_url,
+                    canonical_url=refetched_job.canonical_url,
+                    platform=refetched_job.platform,
+                    items=(),
+                ),
+                Path(tmp_dir),
+            )
 
         mock_resolve.assert_called_once_with("https://vt.tiktok.com/ZS12345ab/")
-        assert refetched_job.canonical_url == "https://www.tiktok.com/@creator/video/1234567890123456789"
-
+        assert result.canonical_url == "https://www.tiktok.com/@creator/video/1234567890123456789"
+        assert result.metadata == dummy_meta

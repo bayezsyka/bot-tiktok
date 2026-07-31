@@ -2,9 +2,16 @@
 import asyncio
 import os
 import tempfile
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from app.database.models import Base, DownloadItem, DownloadJob, utc_now
+from app.downloader.dtos import ProcessedItemResult, ProcessedJobResult
+from app.downloader.metadata import TikTokContentMetadata, TikTokMediaItemMetadata
+from app.gateway.schemas import GatewayMessageResponse
+from app.queue.reconciler import GatewayReconciler
+from app.queue.worker import QueueWorker
 from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
@@ -25,6 +32,24 @@ def _make_engine_and_session(db_path: str):
 
     sm = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     return engine, sm
+
+
+class TransactionTracker:
+    def __init__(self) -> None:
+        self.active = 0
+
+    def install(self, engine) -> None:
+        @event.listens_for(engine.sync_engine, "begin")
+        def _begin(_conn):
+            self.active += 1
+
+        @event.listens_for(engine.sync_engine, "commit")
+        def _commit(_conn):
+            self.active -= 1
+
+        @event.listens_for(engine.sync_engine, "rollback")
+        def _rollback(_conn):
+            self.active -= 1
 
 
 @pytest.fixture
@@ -236,3 +261,190 @@ async def test_failed_session_not_reused(real_sqlite):
         result = await s.execute(select(DownloadJob).where(DownloadJob.id == "noreuse-1"))
         j = result.scalar_one()
         assert j.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_worker_download_wait_does_not_block_reconciler_write(real_sqlite):
+    engine, sm = real_sqlite
+    tracker = TransactionTracker()
+    tracker.install(engine)
+
+    async with sm() as s:
+        worker_job = DownloadJob(
+            id="worker-download-wait", status="queued", sender_number="628000000020",
+            inbound_message_id="inb-worker-download-wait", webhook_event_id="wh-worker-download-wait",
+            original_url="https://www.tiktok.com/@creator/video/200",
+            canonical_url="https://www.tiktok.com/@creator/video/200",
+        )
+        recon_job = DownloadJob(
+            id="recon-during-download", status="gateway_queued", sender_number="628000000021",
+            inbound_message_id="inb-recon-download", webhook_event_id="wh-recon-download",
+            original_url="http://example.com",
+        )
+        s.add_all([worker_job, recon_job])
+        recon_item = DownloadItem(
+            job_id=recon_job.id, position=1, media_type="video",
+            status="gateway_queued", gateway_message_id="msg-recon-download",
+        )
+        s.add(recon_item)
+        await s.commit()
+        recon_item_id = recon_item.id
+
+    worker = QueueWorker(sm)
+    reconciler = GatewayReconciler(sm)
+    download_started = asyncio.Event()
+    release_download = asyncio.Event()
+
+    metadata = TikTokContentMetadata(
+        content_type="video",
+        title="Download wait",
+        author="Creator",
+        duration_seconds=10,
+        items=[TikTokMediaItemMetadata(position=1, source_url="http://src/download.mp4", media_type="video")],
+    )
+
+    async def fake_download(_url, meta, job_dir: Path):
+        assert tracker.active == 0
+        download_started.set()
+        await release_download.wait()
+        media_path = job_dir / "downloaded.mp4"
+        media_path.write_bytes(b"downloaded bytes")
+        return meta.model_copy(
+            update={"items": [meta.items[0].model_copy(update={"local_path": str(media_path)})]}
+        )
+
+    async def fake_process(items, _job_dir):
+        return ProcessedJobResult(
+            items=tuple(
+                ProcessedItemResult(
+                    item_id=item.id,
+                    status="pending",
+                    local_filename=item.local_filename,
+                    final_size_bytes=os.path.getsize(item.local_filename or ""),
+                )
+                for item in items
+            ),
+            final_size_bytes=sum(os.path.getsize(item.local_filename or "") for item in items),
+        )
+
+    with patch("app.downloader.service.YtDlpProvider.extract_metadata", new_callable=AsyncMock, return_value=metadata), \
+         patch("app.downloader.service.YtDlpProvider.download_content", side_effect=fake_download), \
+         patch("app.media.processor.MediaProcessor.process_job_media", side_effect=fake_process), \
+         patch.object(worker.gateway, "send_media", new_callable=AsyncMock) as mock_send, \
+         patch.object(reconciler.gateway, "get_message", new_callable=AsyncMock) as mock_get:
+        mock_send.return_value = GatewayMessageResponse(status="ok", message_id="msg-worker-download", queue_status="queued")
+        mock_get.return_value = GatewayMessageResponse(
+            status="ok", http_status=200, data={"status": "sent", "delivery_status": "delivered"},
+            queue_status="sent", delivery_status="delivered",
+        )
+
+        worker_task = asyncio.create_task(worker._process_job_safely(worker_job.id))
+        await asyncio.wait_for(download_started.wait(), timeout=2)
+        assert tracker.active == 0
+
+        await reconciler.reconcile_item_ids([recon_item_id])
+
+        async with sm() as s:
+            item = await s.get(DownloadItem, recon_item_id)
+            assert item is not None
+            assert item.status == "completed"
+            await s.commit()
+
+        release_download.set()
+        await worker_task
+
+    async with sm() as s:
+        result = await s.execute(select(DownloadJob).where(DownloadJob.id == worker_job.id))
+        job = result.scalar_one()
+        assert job.status == "gateway_queued"
+        item = (await s.execute(select(DownloadItem).where(DownloadItem.job_id == worker_job.id))).scalar_one()
+        assert item.local_filename is not None
+        assert item.source_size_bytes is not None and item.source_size_bytes > 0
+
+
+@pytest.mark.asyncio
+async def test_worker_ffmpeg_wait_does_not_block_reconciler_write(real_sqlite):
+    engine, sm = real_sqlite
+    tracker = TransactionTracker()
+    tracker.install(engine)
+
+    async with sm() as s:
+        worker_job = DownloadJob(
+            id="worker-ffmpeg-wait", status="queued", sender_number="628000000022",
+            inbound_message_id="inb-worker-ffmpeg-wait", webhook_event_id="wh-worker-ffmpeg-wait",
+            original_url="https://www.tiktok.com/@creator/video/201",
+            canonical_url="https://www.tiktok.com/@creator/video/201",
+        )
+        recon_job = DownloadJob(
+            id="recon-during-ffmpeg", status="gateway_queued", sender_number="628000000023",
+            inbound_message_id="inb-recon-ffmpeg", webhook_event_id="wh-recon-ffmpeg",
+            original_url="http://example.com",
+        )
+        s.add_all([worker_job, recon_job])
+        recon_item = DownloadItem(
+            job_id=recon_job.id, position=1, media_type="video",
+            status="gateway_queued", gateway_message_id="msg-recon-ffmpeg",
+        )
+        s.add(recon_item)
+        await s.commit()
+        recon_item_id = recon_item.id
+
+    worker = QueueWorker(sm)
+    reconciler = GatewayReconciler(sm)
+    processing_started = asyncio.Event()
+    release_processing = asyncio.Event()
+
+    metadata = TikTokContentMetadata(
+        content_type="video",
+        title="FFmpeg wait",
+        author="Creator",
+        duration_seconds=10,
+        items=[TikTokMediaItemMetadata(position=1, source_url="http://src/ffmpeg.mp4", media_type="video")],
+    )
+
+    async def fake_download(_url, meta, job_dir: Path):
+        media_path = job_dir / "downloaded.mp4"
+        media_path.write_bytes(b"downloaded bytes")
+        return meta.model_copy(
+            update={"items": [meta.items[0].model_copy(update={"local_path": str(media_path)})]}
+        )
+
+    async def fake_remux(_source_path: str, target_path: str) -> bool:
+        assert tracker.active == 0
+        processing_started.set()
+        await release_processing.wait()
+        Path(target_path).write_bytes(b"remuxed bytes")
+        return True
+
+    with patch("app.downloader.service.YtDlpProvider.extract_metadata", new_callable=AsyncMock, return_value=metadata), \
+         patch("app.downloader.service.YtDlpProvider.download_content", side_effect=fake_download), \
+         patch("app.media.processor.remux_to_mp4", side_effect=fake_remux), \
+         patch.object(worker.gateway, "send_media", new_callable=AsyncMock) as mock_send, \
+         patch.object(reconciler.gateway, "get_message", new_callable=AsyncMock) as mock_get:
+        mock_send.return_value = GatewayMessageResponse(status="ok", message_id="msg-worker-ffmpeg", queue_status="queued")
+        mock_get.return_value = GatewayMessageResponse(
+            status="ok", http_status=200, data={"status": "sent", "delivery_status": "delivered"},
+            queue_status="sent", delivery_status="delivered",
+        )
+
+        worker_task = asyncio.create_task(worker._process_job_safely(worker_job.id))
+        await asyncio.wait_for(processing_started.wait(), timeout=2)
+        assert tracker.active == 0
+
+        await reconciler.reconcile_item_ids([recon_item_id])
+
+        async with sm() as s:
+            item = await s.get(DownloadItem, recon_item_id)
+            assert item is not None
+            assert item.status == "completed"
+            await s.commit()
+
+        release_processing.set()
+        await worker_task
+
+    async with sm() as s:
+        result = await s.execute(select(DownloadJob).where(DownloadJob.id == worker_job.id))
+        job = result.scalar_one()
+        assert job.status == "gateway_queued"
+        item = (await s.execute(select(DownloadItem).where(DownloadItem.job_id == worker_job.id))).scalar_one()
+        assert item.final_size_bytes is not None and item.final_size_bytes > 0

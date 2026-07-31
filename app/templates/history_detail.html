@@ -206,6 +206,14 @@
                                     <div class="data-label" style="width: 100px;">Read</div>
                                     <div class="data-val">{{ item.gateway_read_at | local_datetime if item.gateway_read_at else '-' }}</div>
                                 </div>
+                                <div class="data-row">
+                                    <div class="data-label" style="width: 100px;">Error Code</div>
+                                    <div class="data-val">{{ item.gateway_error_code or '-' }}</div>
+                                </div>
+                                <div class="data-row">
+                                    <div class="data-label" style="width: 100px;">Error Msg</div>
+                                    <div class="data-val">{{ item.gateway_error_message or '-' }}</div>
+                                </div>
                             </div>
                         </details>
                     </td>

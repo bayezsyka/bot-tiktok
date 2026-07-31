@@ -16,9 +16,9 @@ async def recover_incomplete_jobs(session: AsyncSession) -> int:
     when the application restarted or crashed.
 
     Duplicate safety:
-    - If any item already has a gateway_message_id, the message was already sent.
-      Do NOT requeue (which would re-upload). Instead mark job as gateway_queued/sent
-      so the reconciler picks it up for status tracking.
+    - If all items already have a gateway_message_id, the job only needs reconciliation.
+    - If only some items have a gateway_message_id, requeue for partial-send recovery.
+      The worker skips sent IDs and regenerates/sends only missing items.
 
     If retry is still available and no items were sent, transition back to 'queued'.
     Otherwise mark as 'failed'.
@@ -38,22 +38,29 @@ async def recover_incomplete_jobs(session: AsyncSession) -> int:
 
     recovered_count = 0
     for job in incomplete_jobs:
-        # Check if any item was already sent to gateway (has a message ID)
-        items_with_gw_id = [
-            item for item in (job.items or [])
-            if item.gateway_message_id
-        ]
+        items = list(job.items or [])
+        items_with_gw_id = [item for item in items if item.gateway_message_id]
 
-        if items_with_gw_id:
-            # Some items already have gateway message IDs — do NOT requeue
-            # (requeue would re-extract/download/upload, risking duplicate messages).
-            # Instead, mark job as gateway_queued so reconciler tracks delivery.
+        if items and len(items_with_gw_id) == len(items):
             logger.info(
-                f"Recovery: job {job.id} has {len(items_with_gw_id)} items with "
-                f"gateway_message_id. Marking as gateway_queued for reconciliation "
-                f"(not requeueing to avoid duplicate sends)."
+                f"Recovery: job {job.id} has gateway_message_id on all {len(items)} items. "
+                f"Marking as gateway_queued for reconciliation."
             )
             job.status = "gateway_queued"
+            job.updated_at = utc_now()
+            recovered_count += 1
+        elif items_with_gw_id and job.attempt_count < settings.MAX_JOB_RETRIES:
+            logger.info(
+                f"Recovery: job {job.id} has {len(items_with_gw_id)}/{len(items)} items "
+                f"already accepted by Gateway. Requeueing partial-send recovery."
+            )
+            for item in items:
+                if not item.gateway_message_id and item.status not in ("failed", "cancelled"):
+                    item.status = "pending"
+                    item.updated_at = utc_now()
+            job.status = "queued"
+            job.error_code = "RECOVERY_PARTIAL_SEND"
+            job.error_message = "Recovery partial-send: item yang belum punya Gateway message ID akan diproses ulang."
             job.updated_at = utc_now()
             recovered_count += 1
         elif job.attempt_count < settings.MAX_JOB_RETRIES:

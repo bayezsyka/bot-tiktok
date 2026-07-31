@@ -54,6 +54,8 @@ class GatewayDeliveryService:
             # Message was forwarded to WhatsApp but final result is unknown.
             # Do NOT mark as failed. Do NOT resend.
             if item.status not in ("completed", "failed", "cancelled"):
+                if item.pending_since_at is None:
+                    item.pending_since_at = item.gateway_accepted_at or utc_now()
                 item.status = "delivery_unknown_pending"
                 item.gateway_queue_status = "processing"
                 item.gateway_error_code = error_code
@@ -73,6 +75,7 @@ class GatewayDeliveryService:
                 else:
                     item.gateway_queue_status = "failed"
                     item.status = "failed"
+                    item.pending_since_at = None
                     item.gateway_error_code = error_code or "GATEWAY_DELIVERY_FAILED"
                     item.gateway_error_message = error_message
                     item.error_message = error_message
@@ -84,6 +87,7 @@ class GatewayDeliveryService:
                 else:
                     item.gateway_queue_status = "cancelled"
                     item.status = "cancelled"
+                    item.pending_since_at = None
                     item.gateway_error_code = error_code or "GATEWAY_CANCELLED"
                     item.gateway_error_message = error_message
                     item.error_message = error_message
@@ -100,12 +104,17 @@ class GatewayDeliveryService:
                         if item.status not in ("failed", "cancelled"):
                             if q_status == "sent":
                                 item.status = "sent"
+                                item.pending_since_at = None
                                 if not item.gateway_sent_at:
                                     item.gateway_sent_at = utc_now()
                             elif q_status == "processing":
                                 item.status = "gateway_processing"
+                                if not item.gateway_accepted_at:
+                                    item.gateway_accepted_at = utc_now()
                             elif q_status in ("queued", "scheduled"):
                                 item.status = "gateway_queued"
+                                if not item.gateway_accepted_at:
+                                    item.gateway_accepted_at = utc_now()
 
         # Handle Delivery Status
         if d_status:
@@ -136,6 +145,7 @@ class GatewayDeliveryService:
                     item.gateway_delivery_status = d_status
                     if d_status in ("delivered", "read", "played"):
                         item.status = "completed"
+                        item.pending_since_at = None
                         if d_status == "delivered" and not item.gateway_delivered_at:
                             item.gateway_delivered_at = utc_now()
                         if d_status in ("read", "played") and not item.gateway_read_at:

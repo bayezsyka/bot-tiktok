@@ -1,9 +1,11 @@
 """Tests for worker transaction recovery: rollback on error, fresh sessions, no PendingRollbackError."""
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from app.database.models import DownloadItem
 from app.database.repositories import JobRepository
+from app.downloader.dtos import ExtractedMetadataResult
+from app.downloader.metadata import TikTokContentMetadata, TikTokMediaItemMetadata
+from app.downloader.service import DownloaderService
 from app.gateway.schemas import GatewayMessageResponse
 from app.queue.worker import QueueWorker
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -31,7 +33,8 @@ async def test_operational_error_during_flush_triggers_rollback(test_db: AsyncSe
     async def fake_extract_raises(*args, **kwargs):
         raise Exception("sqlite3.OperationalError: database is locked")
 
-    with patch("app.downloader.service.DownloaderService.extract_and_prepare_job", side_effect=fake_extract_raises):
+    with patch("app.downloader.service.DownloaderService.extract_metadata", side_effect=fake_extract_raises), \
+         patch("app.queue.worker.asyncio.sleep", new_callable=AsyncMock):
         await worker._process_job_safely(job_id)
 
     # Job should be requeued (attempt_count=1 < MAX_JOB_RETRIES=2)
@@ -62,7 +65,8 @@ async def test_handle_job_error_uses_fresh_session(test_db: AsyncSession) -> Non
     worker = QueueWorker(session_maker)
 
     # Directly call _handle_job_error with attempt_count < MAX_RETRIES
-    await worker._handle_job_error(job_id, "test error", attempt_count=0)
+    with patch("app.queue.worker.asyncio.sleep", new_callable=AsyncMock):
+        await worker._handle_job_error(job_id, "test error", attempt_count=0)
 
     async with session_maker() as session:
         job_repo = JobRepository(session)
@@ -129,7 +133,8 @@ async def test_no_pending_rollback_error_after_failed_flush(test_db: AsyncSessio
         call_count += 1
         raise Exception("Simulated OperationalError: database is locked")
 
-    with patch("app.downloader.service.DownloaderService.extract_and_prepare_job", side_effect=extract_that_fails):
+    with patch("app.downloader.service.DownloaderService.extract_metadata", side_effect=extract_that_fails), \
+         patch("app.queue.worker.asyncio.sleep", new_callable=AsyncMock):
         await worker._process_job_safely(job_id)
 
     # Verify no PendingRollbackError — the job should be cleanly requeued
@@ -198,22 +203,25 @@ async def test_job_not_stuck_as_downloading(test_db: AsyncSession) -> None:
 
     worker = QueueWorker(session_maker)
 
-    # Make extraction succeed but download fail
-    async def fake_extract(job_obj, job_dir):
-        job_obj.content_type = "video"
-        job_obj.media_count = 1
-        item = DownloadItem(
-            job_id=job_obj.id, position=1, media_type="video",
-            status="pending", source_url="http://src/1.mp4",
-        )
-        job_obj.items.append(item)
-        return MagicMock(), MagicMock()
+    dummy_meta = TikTokContentMetadata(
+        content_type="video",
+        title="Test Video",
+        author="Creator",
+        duration_seconds=10,
+        items=[TikTokMediaItemMetadata(position=1, source_url="http://src/1.mp4", media_type="video")],
+    )
+    fake_extracted = ExtractedMetadataResult(
+        canonical_url="https://www.tiktok.com/@creator/video/66666",
+        provider=DownloaderService().yt_dlp,
+        metadata=dummy_meta,
+    )
 
     async def fake_download_fails(*args, **kwargs):
         raise Exception("Network timeout during download")
 
-    with patch("app.downloader.service.DownloaderService.extract_and_prepare_job", side_effect=fake_extract), \
-         patch("app.downloader.service.DownloaderService.download_job_content", side_effect=fake_download_fails):
+    with patch("app.downloader.service.DownloaderService.extract_metadata", new_callable=AsyncMock, return_value=fake_extracted), \
+         patch("app.downloader.service.DownloaderService.download_content", side_effect=fake_download_fails), \
+         patch("app.queue.worker.asyncio.sleep", new_callable=AsyncMock):
         await worker._process_job_safely(job_id)
 
     async with session_maker() as session:

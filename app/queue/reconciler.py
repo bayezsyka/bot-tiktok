@@ -2,7 +2,7 @@ import asyncio
 import logging
 import random
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -126,7 +126,7 @@ class GatewayReconciler:
         max_age_hours = self.settings.GATEWAY_RECONCILE_MAX_AGE_HOURS
 
         # Phase 1: Read-only snapshot (short session)
-        candidates: list[tuple[int, str, str, float]] = []  # (id, gw_msg_id, status, staleness_sec)
+        candidates: list[tuple[int, str, str, float, float | None]] = []
         try:
             async with self.session_maker() as session:
                 now = utc_now()
@@ -143,6 +143,8 @@ class GatewayReconciler:
                         DownloadItem.status,
                         DownloadItem.last_gateway_sync_at,
                         DownloadItem.created_at,
+                        DownloadItem.gateway_accepted_at,
+                        DownloadItem.pending_since_at,
                     )
                     .where(
                         DownloadItem.gateway_message_id.isnot(None),
@@ -157,25 +159,30 @@ class GatewayReconciler:
                 rows = result.all()
 
                 for row in rows:
-                    item_id, gw_msg_id, item_status, last_sync, created = row
+                    item_id, gw_msg_id, item_status, last_sync, created, accepted, pending_since = row
                     if not gw_msg_id:
                         continue
 
-                    # Calculate staleness (time since last sync or creation)
-                    reference_time = last_sync or created or now
-                    if reference_time.tzinfo is None:
-                        staleness = (now.replace(tzinfo=None) - reference_time).total_seconds()
-                    else:
-                        staleness = (now - reference_time).total_seconds()
+                    item_age_reference = accepted or created or now
+                    item_age_seconds = _seconds_between(now, item_age_reference)
+                    pending_age_seconds = (
+                        _seconds_between(now, pending_since or accepted or created)
+                        if (pending_since or accepted or created)
+                        else None
+                    )
 
-                    # Backoff: check if enough time has passed since last sync
-                    min_interval = _get_poll_interval(staleness)
-                    if last_sync is not None:
-                        since_last_sync = staleness
+                    min_interval = _get_poll_interval(item_age_seconds)
+                    pending_timed_out = (
+                        item_status == "delivery_unknown_pending"
+                        and pending_age_seconds is not None
+                        and pending_age_seconds >= _PENDING_TIMEOUT_SECONDS
+                    )
+                    if last_sync is not None and not pending_timed_out:
+                        since_last_sync = _seconds_between(now, last_sync)
                         if since_last_sync < min_interval:
                             continue  # Not yet due for re-poll
 
-                    candidates.append((item_id, gw_msg_id, item_status, staleness))
+                    candidates.append((item_id, gw_msg_id, item_status, item_age_seconds, pending_age_seconds))
 
                     if len(candidates) >= batch_size:
                         break
@@ -187,13 +194,17 @@ class GatewayReconciler:
             return
 
         # Phase 2 + 3: Network calls then per-item writes
-        for item_id, gw_msg_id, item_status, staleness in candidates:
+        for item_id, gw_msg_id, item_status, _item_age_seconds, pending_age_seconds in candidates:
             if time.monotonic() < self._rate_limit_until:
                 logger.info("Reconciler batch aborted due to rate limit cooldown.")
                 break
 
             # Check delivery_unknown_pending timeout
-            if item_status == "delivery_unknown_pending" and staleness > _PENDING_TIMEOUT_SECONDS:
+            if (
+                item_status == "delivery_unknown_pending"
+                and pending_age_seconds is not None
+                and pending_age_seconds >= _PENDING_TIMEOUT_SECONDS
+            ):
                 await self._promote_to_delivery_unknown(item_id)
                 continue
 
@@ -235,7 +246,11 @@ class GatewayReconciler:
                         q_status = response.queue_status
                         d_status = response.delivery_status
                         error_code = response.data.get("error_code") or response.data.get("last_error_code")
-                        error_message = response.data.get("error_message") or response.data.get("error")
+                        error_message = (
+                            response.data.get("error_message")
+                            or response.data.get("last_error_message")
+                            or response.data.get("error")
+                        )
                         await delivery_service.process_outbound_status(
                             item=item,
                             d_status=d_status,
@@ -296,3 +311,9 @@ def _get_poll_interval(staleness_seconds: float) -> float:
         if staleness_seconds > threshold:
             return float(interval)
     return 15.0
+
+
+def _seconds_between(now: datetime, earlier: datetime) -> float:
+    if earlier.tzinfo is None:
+        return float((now.replace(tzinfo=None) - earlier).total_seconds())
+    return float((now - earlier).total_seconds())

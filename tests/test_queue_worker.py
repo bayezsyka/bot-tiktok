@@ -1,10 +1,13 @@
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from app.database.models import DownloadItem
 from app.database.repositories import JobRepository
+from app.downloader.dtos import (
+    ProcessedItemResult,
+    ProcessedJobResult,
+)
 from app.downloader.metadata import TikTokContentMetadata, TikTokMediaItemMetadata
 from app.gateway.schemas import GatewayMessageResponse
 from app.queue.worker import QueueWorker
@@ -36,35 +39,30 @@ async def test_queue_worker_single_job_lifecycle(test_db: AsyncSession) -> None:
     dummy_file.close()
 
     try:
-        mock_provider = MagicMock()
         fake_meta = TikTokContentMetadata(
             content_type="video",
             title="Test Video",
             author="Creator",
             duration_seconds=15,
-            items=[TikTokMediaItemMetadata(position=1, source_url="http://src/1.mp4", media_type="video", local_path=dummy_file.name)],
+            items=[TikTokMediaItemMetadata(position=1, source_url="http://src/1.mp4", media_type="video")],
         )
-
-        async def fake_extract(job_obj, job_dir):
-            job_obj.content_type = "video"
-            job_obj.media_count = 1
-            job_obj.duration_seconds = 15
-            item = DownloadItem(
-                job_id=job_obj.id,
-                position=1,
-                media_type="video",
-                status="pending",
-                source_url="http://src/1.mp4",
-                local_filename=dummy_file.name,
-                source_size_bytes=100,
+        async def fake_process(items, job_dir):
+            return ProcessedJobResult(
+                items=tuple(
+                    ProcessedItemResult(
+                        item_id=item.id,
+                        status="pending",
+                        local_filename=dummy_file.name,
+                        final_size_bytes=100,
+                    )
+                    for item in items
+                ),
                 final_size_bytes=100,
             )
-            job_obj.items.append(item)
-            return mock_provider, fake_meta
 
-        with patch("app.downloader.service.DownloaderService.extract_and_prepare_job", side_effect=fake_extract), \
-             patch("app.downloader.service.DownloaderService.download_job_content", new_callable=AsyncMock), \
-             patch("app.media.processor.MediaProcessor.process_job_media", new_callable=AsyncMock), \
+        with patch("app.downloader.service.YtDlpProvider.extract_metadata", new_callable=AsyncMock, return_value=fake_meta), \
+             patch("app.downloader.service.YtDlpProvider.download_content", new_callable=AsyncMock, return_value=fake_meta.model_copy(update={"items": [fake_meta.items[0].model_copy(update={"local_path": dummy_file.name})]})), \
+             patch("app.media.processor.MediaProcessor.process_job_media", side_effect=fake_process), \
              patch.object(worker.gateway, "send_media", new_callable=AsyncMock) as mock_send, \
              patch.object(worker.gateway, "send_text", new_callable=AsyncMock) as mock_send_text:
 
@@ -112,26 +110,21 @@ async def test_queue_worker_handles_202_with_message_id(test_db: AsyncSession) -
             title="Test",
             author="Creator",
             duration_seconds=10,
-            items=[TikTokMediaItemMetadata(position=1, source_url="http://src/1.mp4", media_type="video", local_path=dummy_file.name)],
+            items=[TikTokMediaItemMetadata(position=1, source_url="http://src/1.mp4", media_type="video")],
         )
 
-        async def fake_extract(job_obj, job_dir):
-            job_obj.content_type = "video"
-            job_obj.media_count = 1
-            item = DownloadItem(
-                job_id=job_obj.id,
-                position=1,
-                media_type="video",
-                status="pending",
-                source_url="http://src/1.mp4",
-                local_filename=dummy_file.name,
+        async def fake_process(items, job_dir):
+            return ProcessedJobResult(
+                items=tuple(
+                    ProcessedItemResult(item_id=item.id, status="pending", local_filename=dummy_file.name, final_size_bytes=100)
+                    for item in items
+                ),
+                final_size_bytes=100,
             )
-            job_obj.items.append(item)
-            return MagicMock(), fake_meta
 
-        with patch("app.downloader.service.DownloaderService.extract_and_prepare_job", side_effect=fake_extract), \
-             patch("app.downloader.service.DownloaderService.download_job_content", new_callable=AsyncMock), \
-             patch("app.media.processor.MediaProcessor.process_job_media", new_callable=AsyncMock), \
+        with patch("app.downloader.service.YtDlpProvider.extract_metadata", new_callable=AsyncMock, return_value=fake_meta), \
+             patch("app.downloader.service.YtDlpProvider.download_content", new_callable=AsyncMock, return_value=fake_meta.model_copy(update={"items": [fake_meta.items[0].model_copy(update={"local_path": dummy_file.name})]})), \
+             patch("app.media.processor.MediaProcessor.process_job_media", side_effect=fake_process), \
              patch.object(worker.gateway, "send_media", new_callable=AsyncMock) as mock_send:
 
             # Return 202 with message_id
@@ -181,26 +174,21 @@ async def test_queue_worker_handles_202_without_message_id_failure(test_db: Asyn
             title="Test",
             author="Creator",
             duration_seconds=10,
-            items=[TikTokMediaItemMetadata(position=1, source_url="http://src/1.mp4", media_type="video", local_path=dummy_file.name)],
+            items=[TikTokMediaItemMetadata(position=1, source_url="http://src/1.mp4", media_type="video")],
         )
 
-        async def fake_extract(job_obj, job_dir):
-            job_obj.content_type = "video"
-            job_obj.media_count = 1
-            item = DownloadItem(
-                job_id=job_obj.id,
-                position=1,
-                media_type="video",
-                status="pending",
-                source_url="http://src/1.mp4",
-                local_filename=dummy_file.name,
+        async def fake_process(items, job_dir):
+            return ProcessedJobResult(
+                items=tuple(
+                    ProcessedItemResult(item_id=item.id, status="pending", local_filename=dummy_file.name, final_size_bytes=100)
+                    for item in items
+                ),
+                final_size_bytes=100,
             )
-            job_obj.items.append(item)
-            return MagicMock(), fake_meta
 
-        with patch("app.downloader.service.DownloaderService.extract_and_prepare_job", side_effect=fake_extract), \
-             patch("app.downloader.service.DownloaderService.download_job_content", new_callable=AsyncMock), \
-             patch("app.media.processor.MediaProcessor.process_job_media", new_callable=AsyncMock), \
+        with patch("app.downloader.service.YtDlpProvider.extract_metadata", new_callable=AsyncMock, return_value=fake_meta), \
+             patch("app.downloader.service.YtDlpProvider.download_content", new_callable=AsyncMock, return_value=fake_meta.model_copy(update={"items": [fake_meta.items[0].model_copy(update={"local_path": dummy_file.name})]})), \
+             patch("app.media.processor.MediaProcessor.process_job_media", side_effect=fake_process), \
              patch.object(worker.gateway, "send_media", new_callable=AsyncMock) as mock_send, \
              patch.object(worker.gateway, "send_text", new_callable=AsyncMock) as mock_send_text:
 
