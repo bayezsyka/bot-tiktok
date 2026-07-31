@@ -173,8 +173,8 @@ class FarrosWAGatewayClient:
         to: str,
         media_type: str,
         file_path: str,
-        caption: str,
-        external_reference: str,
+        caption: str | None = None,
+        external_reference: str | None = None,
         idempotency_key: str | None = None,
     ) -> GatewayMessageResponse:
         path = Path(file_path)
@@ -185,9 +185,11 @@ class FarrosWAGatewayClient:
             "type": str(media_type),
             "to": str(to),
             "filename": path.name,
-            "caption": str(caption),
-            "external_reference": str(external_reference),
+            "external_reference": str(external_reference) if external_reference else "",
         }
+        if caption:
+            data["caption"] = str(caption)
+
         if self.session_id:
             data["session_id"] = self.session_id
 
@@ -208,7 +210,42 @@ class FarrosWAGatewayClient:
 
     async def get_message(self, message_id: str) -> GatewayMessageResponse:
         """Fetch message details from gateway."""
-        return await self._execute_request(
-            method="GET",
-            endpoint=f"/api/v1/messages/{message_id}",
-        )
+        try:
+            return await self._execute_request(
+                method="GET",
+                endpoint=f"/api/v1/messages/{message_id}",
+            )
+        except GatewayResponseError as e:
+            if e.status_code == 404:
+                return GatewayMessageResponse(
+                    status="ok",
+                    http_status=404,
+                    delivery_status="delivery_unknown",
+                    data={"error_message": "Message not found in Gateway (404)"}
+                )
+            if e.status_code in (401, 403):
+                logger.error("Gateway authentication/authorization error. Check API key.")
+            raise
+
+    async def get_default_session(self) -> dict[str, Any]:
+        if not self.session_id:
+            return {"status": "unavailable", "session_id": None}
+
+        try:
+            resp = await self._execute_request(
+                method="GET",
+                endpoint=f"/api/v1/sessions/{self.session_id}",
+            )
+            data = resp.data or {}
+            status = data.get("status", "unknown")
+            return {
+                "status": "connected" if status == "AUTHENTICATED" else status,
+                "connected": status == "AUTHENTICATED",
+                "session_id": self.session_id
+            }
+        except GatewayResponseError as e:
+            logger.error(f"Failed to fetch session status: {e}")
+            return {"status": "error", "session_id": self.session_id, "error": str(e)}
+        except Exception as e:
+            logger.error(f"Network error fetching session status: {e}")
+            return {"status": "disconnected", "session_id": self.session_id}

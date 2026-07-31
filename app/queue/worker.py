@@ -91,24 +91,9 @@ class QueueWorker:
     async def _send_failure_notification(
         self, job: DownloadJob, session: AsyncSession, custom_message: str | None = None
     ) -> None:
-        if job.failure_notification_sent_at:
-            return
-
-        try:
-            fail_msg = (
-                custom_message
-                or "konten tidak dapat diproses. pastikan link masih aktif, bersifat publik, dan dapat dibuka."
-            )
-            await self.gateway.send_text(
-                to=job.sender_number,
-                text=fail_msg,
-                external_reference=f"media-{job.inbound_message_id}-fail",
-                idempotency_key=f"media-{job.inbound_message_id}-failure",
-            )
-            queue_service = QueueService(session)
-            await queue_service.mark_job_failure_notification_sent(job.id)
-        except Exception as e:
-            logger.error(f"Could not send failure notification to {job.sender_number}: {e}")
+        from app.gateway.delivery_service import GatewayDeliveryService
+        delivery_service = GatewayDeliveryService(session)
+        await delivery_service.send_failure_notification(job, custom_message)
 
     async def _process_job_safely(self, job_id: str) -> None:
         job_dir = None
@@ -289,54 +274,51 @@ class QueueWorker:
                     idempotency_key=idemp_key,
                 )
 
-                # Assume 202 means 'gateway_queued' unless gateway tells us otherwise
-                new_status = "gateway_queued"
-                q_status = response.queue_status or "queued"
+                # Set message ID
+                item.gateway_message_id = response.message_id
 
-                await queue_service.update_item_status(
-                    item.id,
-                    status=new_status,
-                    gateway_message_id=response.message_id,
-                    gateway_queue_status=q_status,
-                    gateway_delivery_status=response.delivery_status
+                from app.gateway.delivery_service import GatewayDeliveryService
+                delivery_service = GatewayDeliveryService(session)
+
+                q_status = response.queue_status or "queued"
+                await delivery_service.process_outbound_status(
+                    item=item,
+                    d_status=response.delivery_status,
+                    q_status=q_status
                 )
                 sent_count += 1
                 await session.commit()
             except GatewayResponseError as e:
                 # 4xx or permanent gateway response
                 logger.error(f"[Stage: Sending] GatewayResponseError sending item {item.id} for job {job.id}: status={e.status_code}, message={e.message}")
-                await queue_service.update_item_status(
-                    item.id, status="failed", error_message=f"Gateway error: {e.message}"
+
+                from app.gateway.delivery_service import GatewayDeliveryService
+                delivery_service = GatewayDeliveryService(session)
+                await delivery_service.process_outbound_status(
+                    item=item,
+                    q_status="failed",
+                    error_message=f"Gateway error: {e.message}"
                 )
                 failed_count += 1
                 await session.commit()
             except GatewayError as e:
                 # Network or timeout error when sending item
                 logger.warning(f"[Stage: Sending] Network error sending item {item.id} for job {job.id}: {e}")
-                await queue_service.update_item_status(item.id, status="failed", error_message=str(e))
+
+                from app.gateway.delivery_service import GatewayDeliveryService
+                delivery_service = GatewayDeliveryService(session)
+                await delivery_service.process_outbound_status(
+                    item=item,
+                    q_status="failed",
+                    error_message=str(e)
+                )
                 failed_count += 1
                 await session.commit()
 
-        # Final check
+        # Job status is now automatically synced by GatewayDeliveryService.
+        # We just need to update the sent/failed counts.
         job.sent_count = sent_count
         job.failed_count = failed_count
-
-        if sent_count == total_items and total_items > 0:
-            await queue_service.update_job_status(job.id, "gateway_queued")
-        elif sent_count > 0:
-            await queue_service.update_job_status(
-                job.id, "gateway_queued" if failed_count == 0 else "failed",
-                error_code="PARTIAL_FAILURE" if failed_count > 0 else None,
-                error_message=f"Terkirim ke gateway {sent_count}/{total_items} item media." if failed_count > 0 else None,
-            )
-            if failed_count > 0:
-                await self._send_failure_notification(job, session, "Gagal mengirim sebagian media.")
-        else:
-            await queue_service.update_job_status(
-                job.id, "failed", error_code="SEND_FAILED", error_message="Gagal mengirim semua item media ke gateway."
-            )
-            await self._send_failure_notification(job, session)
-
         await session.commit()
 
 

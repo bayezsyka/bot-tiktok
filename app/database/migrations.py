@@ -59,12 +59,22 @@ async def init_db(engine: AsyncEngine) -> None:
             await conn.execute(text("ALTER TABLE download_jobs ADD COLUMN last_gateway_sync_at DATETIME;"))
             await conn.execute(text("ALTER TABLE download_jobs ADD COLUMN failure_notification_sent_at DATETIME;"))
 
+        # Migration 5: Add index for gateway_message_id
+        result = await conn.execute(text("PRAGMA index_list(download_items);"))
+        indexes = [row[1] for row in result.fetchall()]
+        if "ix_download_items_gateway_message_id" not in indexes:
+            logger.info("Migrating schema: Adding index ix_download_items_gateway_message_id")
+            await conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_download_items_gateway_message_id ON download_items(gateway_message_id);")
+            )
+
         # Track migration versions in schema_migrations table
         migrations = [
             "001_add_lid_to_allowed_numbers",
             "002_create_unmapped_lids_table",
             "003_add_platform_to_download_jobs",
             "004_add_gateway_delivery_fields",
+            "005_add_gateway_message_id_index",
         ]
         for version in migrations:
             await conn.execute(

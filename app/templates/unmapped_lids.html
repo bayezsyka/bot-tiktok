@@ -75,7 +75,7 @@
                             </form>
 
                             <details>
-                                <summary style="font-size: 0.75rem; color: var(--accent-primary);">+ Buat & Pasangkan Nomor Baru</summary>
+                                <summary style="font-size: 0.75rem; color: var(--primary);">+ Buat & Pasangkan Nomor Baru</summary>
                                 <form action="/admin/unmapped-lids/{{ item.id }}/assign-new" method="post" class="details-content" style="display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem;">
                                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                                     <input type="text" name="name" required placeholder="Nama Pengguna" class="form-control" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">

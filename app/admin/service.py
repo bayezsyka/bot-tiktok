@@ -41,9 +41,8 @@ class AdminService:
         try:
             from app.gateway.client import FarrosWAGatewayClient
             gateway = FarrosWAGatewayClient()
-            resp = await gateway._execute_request("GET", "/api/v1/sessions/default")
-            if resp.status == "ok" and resp.data:
-                session_status = resp.data.get("data", {}).get("status", "unknown")
+            session_info = await gateway.get_default_session()
+            session_status = session_info.get("status", "unknown")
         except Exception:
             session_status = "error"
 

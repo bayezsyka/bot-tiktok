@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.connection import get_db
-from app.database.models import DownloadItem, utc_now
+from app.database.models import DownloadItem
 from app.database.repositories import (
     AllowedNumberRepository,
     JobRepository,
@@ -17,7 +17,6 @@ from app.database.repositories import (
     WebhookEventRepository,
 )
 from app.gateway.client import FarrosWAGatewayClient
-from app.queue.service import QueueService
 from app.security.rate_limit import check_webhook_rate_limit
 from app.security.urls import (
     extract_supported_media_url,
@@ -62,46 +61,17 @@ async def _handle_outbound_status_event(db: AsyncSession, event_type: str, paylo
         return
 
     delivery_status = event_type.split(".")[1]
-    item.gateway_delivery_status = delivery_status
-    item.last_gateway_sync_at = utc_now()
 
-    if delivery_status == "sent" and not item.gateway_sent_at:
-        item.gateway_sent_at = utc_now()
-        if item.status not in ("completed", "failed"):
-            item.status = "sent"
-    elif delivery_status == "delivered" and not item.gateway_delivered_at:
-        item.gateway_delivered_at = utc_now()
-        item.status = "completed"
-    elif delivery_status in ("read", "played") and not item.gateway_read_at:
-        item.gateway_read_at = utc_now()
-        item.status = "completed"
-    elif delivery_status == "failed":
-        item.gateway_failed_at = utc_now()
-        item.gateway_error_message = data.get("error_message") or data.get("error")
-        if item.status != "completed":
-            item.status = "failed"
+    from app.gateway.delivery_service import GatewayDeliveryService
+    delivery_service = GatewayDeliveryService(db)
 
-    await db.flush()
-
-    # Sync job status
-    queue_service = QueueService(db)
-    job_stmt = select(DownloadItem).where(DownloadItem.job_id == item.job_id)
-    res = await db.execute(job_stmt)
-    items = res.scalars().all()
-
-    total = len(items)
-    completed_count = sum(1 for i in items if i.status == "completed")
-    failed_count = sum(1 for i in items if i.status == "failed")
-    sent_count = sum(1 for i in items if i.status == "sent")
-
-    if completed_count == total:
-        await queue_service.update_job_status(item.job_id, "completed")
-    elif failed_count == total:
-        await queue_service.update_job_status(item.job_id, "failed", error_code="DELIVERY_FAILED", error_message="Semua item gagal terkirim oleh gateway.")
-    elif completed_count + failed_count == total:
-        await queue_service.update_job_status(item.job_id, "completed")
-    elif sent_count > 0 or completed_count > 0:
-        await queue_service.update_job_status(item.job_id, "sent")
+    error_message = data.get("error_message") or data.get("error")
+    await delivery_service.process_outbound_status(
+        item=item,
+        d_status=delivery_status,
+        q_status=None,
+        error_message=error_message
+    )
 
 @router.post("/farros-wa", response_model=WebhookEventResponse)
 async def handle_farros_wa_webhook(
