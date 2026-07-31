@@ -316,9 +316,14 @@ class QueueWorker:
                 await session.commit()
 
         # Job status is now automatically synced by GatewayDeliveryService.
-        # We just need to update the sent/failed counts.
+        # We just need to update the sent/failed counts and sync one final time.
         job.sent_count = sent_count
         job.failed_count = failed_count
+
+        from app.gateway.delivery_service import GatewayDeliveryService
+        delivery_service = GatewayDeliveryService(session)
+        await delivery_service.sync_job_status(job.id)
+
         await session.commit()
 
 

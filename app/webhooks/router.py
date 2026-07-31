@@ -60,16 +60,28 @@ async def _handle_outbound_status_event(db: AsyncSession, event_type: str, paylo
         # Not a message we track
         return
 
-    delivery_status = event_type.split(".")[1]
+    q_status = None
+    d_status = None
+    error_message = data.get("error_message") or data.get("error")
+
+    if event_type == "message.sent":
+        q_status = "sent"
+    elif event_type == "message.delivered":
+        d_status = "delivered"
+    elif event_type == "message.read":
+        d_status = "read"
+    elif event_type == "message.played":
+        d_status = "played"
+    elif event_type == "message.failed":
+        q_status = "failed"
 
     from app.gateway.delivery_service import GatewayDeliveryService
     delivery_service = GatewayDeliveryService(db)
 
-    error_message = data.get("error_message") or data.get("error")
     await delivery_service.process_outbound_status(
         item=item,
-        d_status=delivery_status,
-        q_status=None,
+        d_status=d_status,
+        q_status=q_status,
         error_message=error_message
     )
 

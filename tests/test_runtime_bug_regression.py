@@ -370,5 +370,5 @@ async def test_existing_sent_item_not_duplicated_or_resent(test_db: AsyncSession
         # Job should complete right away since all items are sent
         final_job = await job_repo.get_by_id(job_id)
         assert final_job is not None
-        assert final_job.status == "gateway_queued"
+        assert final_job.status == "sent"
         assert final_job.items[0].gateway_message_id == "old-gateway-msg-id-123"

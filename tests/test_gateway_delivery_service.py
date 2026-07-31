@@ -59,5 +59,6 @@ async def test_delivery_unknown(mock_db, item):
 
     with patch.object(service, "sync_job_status", new_callable=AsyncMock):
         await service.process_outbound_status(item, d_status="delivery_unknown")
-        assert item.gateway_delivery_status == "delivery_unknown"
-        assert item.status == "delivery_unknown"
+    assert item.gateway_delivery_status is None
+    assert item.status == "delivery_unknown"
+    assert item.gateway_error_code == "MESSAGE_NOT_FOUND"

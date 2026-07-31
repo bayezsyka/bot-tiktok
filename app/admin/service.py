@@ -37,14 +37,24 @@ class AdminService:
             pass
 
         # Fetch Gateway Session Status
-        session_status = "unknown"
         try:
             from app.gateway.client import FarrosWAGatewayClient
             gateway = FarrosWAGatewayClient()
             session_info = await gateway.get_default_session()
-            session_status = session_info.get("status", "unknown")
+
+            raw_status = session_info.get("status", "unknown").lower()
+            is_connected = session_info.get("connected", False)
+
+            if is_connected or raw_status == "connected":
+                session_status = "connected"
+            elif raw_status in ("connecting", "reconnecting"):
+                session_status = "connecting"
+            elif raw_status in ("disconnected", "logged_out", "stopped"):
+                session_status = "disconnected"
+            else:
+                session_status = "unavailable"
         except Exception:
-            session_status = "error"
+            session_status = "unavailable"
 
         return {
             "stats": stats,

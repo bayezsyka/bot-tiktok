@@ -43,7 +43,7 @@ async def test_reconciler_selects_null_delivery_status(test_db: AsyncSession):
 
     session_maker = MockSessionMaker()
 
-    reconciler = GatewayReconciler(session_maker)
+    reconciler = GatewayReconciler(session_maker) # type: ignore
 
     with patch.object(reconciler.gateway, "get_message", new_callable=AsyncMock) as mock_get:
         mock_get.return_value.status = "ok"

@@ -245,8 +245,8 @@ async def reconcile_gateway_cmd(args: argparse.Namespace) -> None:
             .where(
                 DownloadItem.gateway_message_id.isnot(None),
                 DownloadItem.created_at >= cutoff,
-                DownloadItem.status.in_(["gateway_queued", "gateway_processing", "sent"]),
-                DownloadItem.gateway_delivery_status.notin_(["read", "played", "delivered", "failed", "delivery_unknown"])
+                DownloadItem.status.in_(["gateway_queued", "gateway_processing", "sent", "delivery_unknown"]),
+                DownloadItem.gateway_delivery_status.notin_(["read", "played", "delivered", "failed"])
             )
         )
         res = await session.execute(stmt)
@@ -261,7 +261,7 @@ async def reconcile_gateway_cmd(args: argparse.Namespace) -> None:
     from app.database.connection import get_session_maker
     reconciler = GatewayReconciler(get_session_maker())
     reconciler.batch_size = len(items)
-    await reconciler._reconcile_batch()
+    await reconciler._reconcile_batch(include_unknown=True)
 
     print("✅ Gateway reconciliation completed.")
 

@@ -99,22 +99,13 @@ class FarrosWAGatewayClient:
                     try:
                         res_json = response.json()
                         if isinstance(res_json, dict):
-                            data_dict = res_json.get("data")
-                            msg_id = None
-                            q_status = None
-                            d_status = None
+                            data_dict = res_json.get("data", res_json)
+                            if not isinstance(data_dict, dict):
+                                data_dict = res_json
 
-                            if isinstance(data_dict, dict):
-                                msg_id = data_dict.get("id") or data_dict.get("message_id")
-                                q_status = data_dict.get("status") or data_dict.get("queue_status")
-                                d_status = data_dict.get("delivery_status")
-
-                            if not msg_id:
-                                msg_id = res_json.get("id") or res_json.get("message_id")
-                            if not q_status:
-                                q_status = res_json.get("status") or res_json.get("queue_status")
-                            if not d_status:
-                                d_status = res_json.get("delivery_status")
+                            msg_id = data_dict.get("id") or data_dict.get("message_id")
+                            q_status = data_dict.get("status") or data_dict.get("queue_status")
+                            d_status = data_dict.get("delivery_status")
 
                             # Interpret HTTP 202 without a specific queue_status as 'queued'
                             if response.status_code == 202 and not q_status:
@@ -228,24 +219,24 @@ class FarrosWAGatewayClient:
             raise
 
     async def get_default_session(self) -> dict[str, Any]:
-        if not self.session_id:
-            return {"status": "unavailable", "session_id": None}
-
         try:
             resp = await self._execute_request(
                 method="GET",
-                endpoint=f"/api/v1/sessions/{self.session_id}",
+                endpoint="/api/v1/sessions/default",
             )
-            data = resp.data or {}
-            status = data.get("status", "unknown")
+            payload = resp.data or {}
+            session_data = payload.get("data", payload)
+
+            status = session_data.get("status", "unknown")
             return {
-                "status": "connected" if status == "AUTHENTICATED" else status,
-                "connected": status == "AUTHENTICATED",
-                "session_id": self.session_id
+                "status": status,
+                "connected": bool(session_data.get("connected")),
+                "session_id": session_data.get("id"),
+                "name": session_data.get("name")
             }
         except GatewayResponseError as e:
             logger.error(f"Failed to fetch session status: {e}")
-            return {"status": "error", "session_id": self.session_id, "error": str(e)}
+            return {"status": "unavailable", "connected": False, "error": str(e)}
         except Exception as e:
             logger.error(f"Network error fetching session status: {e}")
-            return {"status": "disconnected", "session_id": self.session_id}
+            return {"status": "unavailable", "connected": False}

@@ -72,15 +72,19 @@ class GatewayDeliveryService:
                 if old_d_rank >= DELIVERY_RANKS["delivered"]:
                     logger.warning(f"Ignored '{d_status}' status for item {item.id} because it was already '{item.gateway_delivery_status}'")
                 else:
-                    item.gateway_delivery_status = d_status
-                    if item.status != "completed":
-                        if d_status == "failed":
+                    if d_status == "failed":
+                        item.gateway_delivery_status = d_status
+                        if item.status != "completed":
                             item.status = "failed"
                             item.gateway_failed_at = utc_now()
                             if error_message:
                                 item.gateway_error_message = error_message
-                        else:
+                    elif d_status == "delivery_unknown":
+                        if item.status != "completed":
                             item.status = "delivery_unknown"
+                            item.gateway_error_code = "MESSAGE_NOT_FOUND"
+                            if error_message:
+                                item.gateway_error_message = error_message
             else:
                 old_d_rank = DELIVERY_RANKS.get(item.gateway_delivery_status or "", 0)
                 new_d_rank = DELIVERY_RANKS.get(d_status, 0)

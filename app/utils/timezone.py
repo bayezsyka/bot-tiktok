@@ -1,6 +1,6 @@
 import logging
 import zoneinfo
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 
 from app.config import get_settings
 
@@ -11,6 +11,8 @@ def to_local_timezone(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     settings = get_settings()
+
+    tz: tzinfo
 
     try:
         tz = zoneinfo.ZoneInfo(settings.APP_TIMEZONE)

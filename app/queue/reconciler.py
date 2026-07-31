@@ -39,14 +39,19 @@ class GatewayReconciler:
 
         logger.info("GatewayReconciler loop stopped.")
 
-    async def _reconcile_batch(self) -> None:
+    async def _reconcile_batch(self, include_unknown: bool = False) -> None:
         async with self.session_maker() as session:
             # Find items that are queued/processing in gateway but not final
+
+            status_list = ["gateway_queued", "gateway_processing", "sent"]
+            if include_unknown:
+                status_list.append("delivery_unknown")
+
             stmt = (
                 select(DownloadItem)
                 .where(
                     DownloadItem.gateway_message_id.isnot(None),
-                    DownloadItem.status.in_(["gateway_queued", "gateway_processing", "sent"]),
+                    DownloadItem.status.in_(status_list),
                     or_(
                         DownloadItem.gateway_delivery_status.is_(None),
                         DownloadItem.gateway_delivery_status.notin_(["read", "played", "delivered", "failed"])

@@ -11,10 +11,12 @@
     <div>
         {% if gateway_session_status == 'connected' %}
             <span class="badge badge-success">Gateway: Terhubung</span>
+        {% elif gateway_session_status == 'connecting' %}
+            <span class="badge badge-warning">Gateway: Menghubungkan</span>
         {% elif gateway_session_status == 'disconnected' %}
             <span class="badge badge-danger">Gateway: Terputus</span>
         {% else %}
-            <span class="badge badge-warning">Gateway: {{ gateway_session_status }}</span>
+            <span class="badge badge-neutral">Gateway: Tidak tersedia</span>
         {% endif %}
     </div>
 </div>
