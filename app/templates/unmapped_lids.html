@@ -6,24 +6,24 @@
 <div class="page-header">
     <div>
         <h1 class="page-title">LID WhatsApp Belum Dipetakan</h1>
-        <p class="text-muted mt-4">Daftar pengirim @lid yang belum terhubung dengan nomor WhatsApp terdaftar</p>
+        <p class="text-muted mt-2">Daftar pengirim @lid yang belum terhubung dengan nomor WhatsApp terdaftar</p>
     </div>
 </div>
 
 {% if error %}
-<div style="background-color: rgba(239, 68, 68, 0.1); color: var(--status-danger); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; border: 1px solid rgba(239, 68, 68, 0.2);">
-    ⚠️ {{ error }}
+<div class="badge badge-danger" style="display: block; width: 100%; padding: 0.75rem 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; text-transform: none; letter-spacing: normal; text-align: left; line-height: 1.4;">
+    {{ error }}
 </div>
 {% endif %}
 {% if success %}
-<div style="background-color: rgba(16, 185, 129, 0.1); color: var(--status-success); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; border: 1px solid rgba(16, 185, 129, 0.2);">
-    ✅ {{ success }}
+<div class="badge badge-success" style="display: block; width: 100%; padding: 0.75rem 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; text-transform: none; letter-spacing: normal; text-align: left; line-height: 1.4;">
+    {{ success }}
 </div>
 {% endif %}
 
 <div class="card">
     <div class="page-header" style="margin-bottom: 1.5rem;">
-        <h2>Daftar LID Belum Dipetakan <span class="badge badge-neutral">{{ total_count }}</span></h2>
+        <h2 style="font-size: 1.25rem;">Daftar LID Belum Dipetakan <span class="badge badge-neutral" style="margin-left: 0.5rem;">{{ total_count }}</span></h2>
     </div>
     
     <div class="table-container">
@@ -46,7 +46,7 @@
                         <span class="badge badge-info">{{ item.lid_number }}</span>
                     </td>
                     <td><strong>{{ item.occurrence_count }}x</strong></td>
-                    <td style="max-width: 200px;">
+                    <td style="max-width: 250px;">
                         <div class="text-muted text-sm" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ item.last_message_preview }}">
                             {{ item.last_message_preview or '-' }}
                         </div>
@@ -55,44 +55,46 @@
                     <td><span class="text-muted text-sm">{{ item.last_seen_at | local_datetime }}</span></td>
                     <td>
                         {% if item.resolved_at %}
-                        <span class="badge badge-success">Selesai ({{ item.resolved_at | local_datetime }})</span>
+                        <span class="badge badge-success">Selesai</span>
                         {% else %}
                         <span class="badge badge-warning">Belum Dipetakan</span>
                         {% endif %}
                     </td>
                     <td>
                         {% if not item.resolved_at %}
-                        <div style="display: flex; flex-direction: column; gap: 0.5rem; min-width: 240px;">
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem; min-width: 260px;">
+                            <!-- Form hubungkan ke nomor terdaftar -->
                             <form action="/admin/unmapped-lids/{{ item.id }}/assign-existing" method="post" class="flex gap-2">
                                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                                <select name="allowed_number_id" required class="form-control" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
+                                <select name="allowed_number_id" required class="form-control" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; height: 30px;">
                                     <option value="">-- Pilih Nomor --</option>
                                     {% for num in allowed_numbers %}
                                     <option value="{{ num.id }}">{{ num.name }} ({{ num.phone_number }})</option>
                                     {% endfor %}
                                 </select>
-                                <button type="submit" class="btn btn-primary btn-sm">Pasangkan</button>
+                                <button type="submit" class="btn btn-primary btn-sm" style="height: 30px;">Pasangkan</button>
                             </form>
 
-                            <details>
-                                <summary style="font-size: 0.75rem; color: var(--primary);">+ Buat & Pasangkan Nomor Baru</summary>
-                                <form action="/admin/unmapped-lids/{{ item.id }}/assign-new" method="post" class="details-content" style="display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem;">
+                            <!-- Form buat nomor baru -->
+                            <details style="margin-top: 0.25rem; border-color: var(--color-border); background-color: #f8fafc;">
+                                <summary style="font-size: 0.75rem; color: var(--color-accent); padding: 0.375rem 0.75rem;">Buat & Pasangkan Nomor Baru</summary>
+                                <form action="/admin/unmapped-lids/{{ item.id }}/assign-new" method="post" class="details-content" style="display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; background-color: var(--surface);">
                                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                                     <input type="text" name="name" required placeholder="Nama Pengguna" class="form-control" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
                                     <input type="text" name="phone_number" required placeholder="Nomor WA (628...)" class="form-control" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
-                                    <input type="text" name="notes" placeholder="Catatan" class="form-control" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
-                                    <button type="submit" class="btn btn-primary btn-sm" style="margin-top: 0.25rem; width: 100%;">Simpan & Pasangkan LID</button>
+                                    <input type="text" name="notes" placeholder="Catatan (Opsional)" class="form-control" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">
+                                    <button type="submit" class="btn btn-primary btn-sm" style="width: 100%;">Simpan & Pasangkan</button>
                                 </form>
                             </details>
 
                             <div class="flex gap-2" style="margin-top: 0.25rem;">
                                 <form action="/admin/unmapped-lids/{{ item.id }}/resolve" method="post" style="flex: 1;">
                                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                                    <button type="submit" class="btn btn-secondary btn-sm" style="width: 100%;">Abaikan</button>
+                                    <button type="submit" class="btn btn-secondary btn-sm" style="width: 100%; height: 30px;">Abaikan</button>
                                 </form>
                                 <form action="/admin/unmapped-lids/{{ item.id }}/delete" method="post" onsubmit="return confirm('Hapus riwayat unmapped LID ini?');" style="flex: 1;">
                                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                                    <button type="submit" class="btn btn-danger btn-sm" style="width: 100%;">Hapus</button>
+                                    <button type="submit" class="btn btn-danger btn-sm" style="width: 100%; height: 30px;">Hapus</button>
                                 </form>
                             </div>
                         </div>

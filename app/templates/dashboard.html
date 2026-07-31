@@ -5,8 +5,8 @@
 {% block content %}
 <div class="page-header">
     <div>
-        <h1 class="page-title">Ikhtisar Sistem Media Bot</h1>
-        <p class="text-muted mt-4">Real-time status pemrosesan media TikTok & Instagram Reels dan gateway WhatsApp</p>
+        <h1 class="page-title">Ikhtisar Sistem</h1>
+        <p class="text-muted mt-2">Real-time status pemrosesan media TikTok & Instagram Reels dan gateway WhatsApp</p>
     </div>
     <div>
         {% if gateway_session_status == 'connected' %}
@@ -52,13 +52,15 @@
     </div>
     <div class="card stat-card">
         <div class="stat-label">LID Belum Dipetakan</div>
-        <div class="stat-value"><a href="/admin/unmapped-lids">{{ unmapped_count }}</a></div>
+        <div class="stat-value">
+            <a href="/admin/unmapped-lids" style="color: inherit; text-decoration: underline;">{{ unmapped_count }}</a>
+        </div>
     </div>
 </div>
 
 <div class="card">
-    <div class="page-header" style="margin-bottom: 1rem;">
-        <h2>10 Aktivitas Terbaru</h2>
+    <div class="page-header" style="margin-bottom: 1.5rem;">
+        <h2 style="font-size: 1.25rem;">10 Aktivitas Terbaru</h2>
         <a href="/admin/history" class="btn btn-secondary btn-sm">Lihat Semua Riwayat</a>
     </div>
     <div class="table-container">
@@ -77,7 +79,7 @@
             <tbody>
                 {% for job in recent_jobs %}
                 <tr>
-                    <td><span class="text-muted">{{ job.created_at | local_datetime }}</span></td>
+                    <td><span class="text-muted text-sm">{{ job.created_at | local_datetime }}</span></td>
                     <td>
                         {% if job.platform == 'instagram' %}
                         <span class="badge badge-warning">Instagram</span>
@@ -87,8 +89,8 @@
                     </td>
                     <td><span class="badge badge-neutral">{{ job.sender_number }}</span></td>
                     <td>
-                        <a href="{{ job.original_url }}" target="_blank" rel="noopener noreferrer">
-                            {{ job.original_url[:30] }}{% if job.original_url|length > 30 %}...{% endif %}
+                        <a href="{{ job.original_url }}" target="_blank" rel="noopener noreferrer" style="font-size: 0.875rem;">
+                            {{ job.original_url[:35] }}{% if job.original_url|length > 35 %}...{% endif %}
                         </a>
                     </td>
                     <td><span class="badge badge-neutral">{{ job.content_type or '-' }}</span></td>
@@ -98,7 +100,7 @@
                         {% elif job.status == 'failed' %}
                             <span class="badge badge-danger">Gagal</span>
                         {% elif job.status in ['queued', 'extracting', 'downloading', 'processing', 'gateway_queued', 'gateway_processing', 'sent'] %}
-                            <span class="badge badge-warning">Sedang Diproses ({{ job.status }})</span>
+                            <span class="badge badge-warning">Sedang Diproses</span>
                         {% else %}
                             <span class="badge badge-neutral">{{ job.status }}</span>
                         {% endif %}

@@ -5,37 +5,38 @@
 {% block content %}
 <div class="page-header">
     <div>
-        <a href="/admin/history" class="text-muted" style="display: inline-block; margin-bottom: 0.5rem; font-size: 0.875rem;">&larr; Kembali ke Riwayat</a>
+        <a href="/admin/history" class="text-muted" style="display: inline-flex; align-items: center; gap: 0.25rem; margin-bottom: 0.5rem; font-size: 0.875rem;">← Kembali ke Riwayat</a>
         <h1 class="page-title">Detail Pekerjaan #{{ job.id[:8] }}...</h1>
-        <p class="text-muted mt-4">Inbound ID: {{ job.inbound_message_id }}</p>
+        <p class="text-muted mt-2">Inbound ID: {{ job.inbound_message_id }}</p>
     </div>
     <div>
         {% if job.status == 'failed' %}
         <form action="/admin/history/{{ job.id }}/retry" method="post" style="display: inline;">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="btn btn-warning">🔄 Coba Ulang (Retry)</button>
+            <button type="submit" class="btn btn-warning">Coba Ulang</button>
         </form>
         {% endif %}
     </div>
 </div>
 
 {% if message %}
-<div style="background-color: rgba(16, 185, 129, 0.1); color: var(--status-success); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; border: 1px solid rgba(16, 185, 129, 0.2);">
+<div class="badge badge-success" style="display: block; width: 100%; padding: 0.75rem 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; text-transform: none; letter-spacing: normal; text-align: left; line-height: 1.4;">
     {{ message }}
 </div>
 {% endif %}
 {% if job.error_message %}
-<div style="background-color: rgba(239, 68, 68, 0.1); color: var(--status-danger); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; border: 1px solid rgba(239, 68, 68, 0.2);">
+<div class="badge badge-danger" style="display: block; width: 100%; padding: 0.75rem 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; text-transform: none; letter-spacing: normal; text-align: left; line-height: 1.4;">
     <strong>Error Info:</strong> {{ job.error_code or 'FAILED' }} &mdash; {{ job.error_message }}
 </div>
 {% endif %}
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 2rem;">
-    <div class="card">
-        <h2 style="margin-bottom: 1.5rem;">Informasi Utama</h2>
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-bottom: 2rem;">
+    <!-- Informasi Utama Card -->
+    <div class="card" style="margin-bottom: 0;">
+        <h2 class="card-title">Informasi Utama</h2>
         
         <div style="display: flex; flex-direction: column; gap: 1rem;">
-            <div class="flex justify-between items-center" style="border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+            <div class="flex justify-between items-center" style="border-bottom: 1px solid var(--color-border); padding-bottom: 0.75rem;">
                 <span class="text-muted">Platform</span>
                 <span>
                     {% if job.platform == 'instagram' %}
@@ -46,7 +47,7 @@
                 </span>
             </div>
             
-            <div class="flex justify-between items-center" style="border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+            <div class="flex justify-between items-center" style="border-bottom: 1px solid var(--color-border); padding-bottom: 0.75rem;">
                 <span class="text-muted">Status Terkini</span>
                 <span>
                     {% if job.status == 'completed' %}
@@ -61,45 +62,51 @@
                 </span>
             </div>
             
-            <div class="flex justify-between items-center" style="border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+            <div class="flex justify-between items-center" style="border-bottom: 1px solid var(--color-border); padding-bottom: 0.75rem;">
                 <span class="text-muted">Nomor Pengirim</span>
                 <span class="badge badge-neutral">{{ job.sender_number }}</span>
             </div>
             
-            <div class="flex justify-between items-center" style="border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+            <div class="flex justify-between items-center" style="border-bottom: 1px solid var(--color-border); padding-bottom: 0.75rem;">
                 <span class="text-muted">Media Terkirim</span>
-                <span>{{ job.sent_count }} / {{ job.media_count }} {% if job.failed_count > 0 %}(<span class="text-danger">{{ job.failed_count }} gagal</span>){% endif %}</span>
+                <span style="font-weight: 600;">{{ job.sent_count }} / {{ job.media_count }} {% if job.failed_count > 0 %}(<span class="text-danger">{{ job.failed_count }} gagal</span>){% endif %}</span>
             </div>
             
-            <div class="flex justify-between items-center" style="border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+            <div class="flex justify-between items-center" style="border-bottom: 1px solid var(--color-border); padding-bottom: 0.75rem;">
                 <span class="text-muted">Tipe Konten</span>
                 <span class="badge badge-neutral">{{ job.content_type or 'Belum terdeteksi' }}</span>
             </div>
 
             <div style="padding-top: 0.25rem;">
-                <span class="text-muted" style="display: block; margin-bottom: 0.5rem;">Link Sumber</span>
+                <span class="text-muted" style="display: block; margin-bottom: 0.5rem; font-size: 0.875rem;">Link Sumber</span>
                 <a href="{{ job.original_url }}" target="_blank" style="word-break: break-all; font-size: 0.875rem;">{{ job.original_url }}</a>
             </div>
         </div>
         
-        <details class="mt-4">
-            <summary>Data Teknis Lanjutan</summary>
-            <div class="details-content">
+        <details class="mt-4" style="background-color: #f8fafc; border-color: var(--color-border);">
+            <summary style="font-size: 0.8125rem; padding: 0.625rem 1rem;">Data Teknis Lanjutan</summary>
+            <div class="details-content" style="background-color: var(--surface);">
                 <div class="data-row">
                     <div class="data-label">Job UUID</div>
                     <div class="data-val"><code>{{ job.id }}</code></div>
                 </div>
                 <div class="data-row">
                     <div class="data-label">Canonical URL</div>
-                    <div class="data-val">{{ job.canonical_url or '-' }}</div>
+                    <div class="data-val" style="font-size: 0.8125rem;">{{ job.canonical_url or '-' }}</div>
                 </div>
                 <div class="data-row">
                     <div class="data-label">Ukuran Video</div>
-                    <div class="data-val">{{ (job.source_size_bytes / (1024*1024))|round(2) }} MB &rarr; {{ (job.final_size_bytes / (1024*1024))|round(2) }} MB</div>
+                    <div class="data-val">
+                        {% if job.source_size_bytes %}
+                            {{ (job.source_size_bytes / (1024*1024))|round(2) }} MB → {{ (job.final_size_bytes / (1024*1024))|round(2) }} MB
+                        {% else %}
+                            -
+                        {% endif %}
+                    </div>
                 </div>
                 <div class="data-row">
                     <div class="data-label">Durasi Video</div>
-                    <div class="data-val">{{ job.duration_seconds }} detik</div>
+                    <div class="data-val">{{ job.duration_seconds or '-' }} detik</div>
                 </div>
                 <div class="data-row">
                     <div class="data-label">Percobaan</div>
@@ -109,39 +116,34 @@
         </details>
     </div>
 
-    <div class="card">
-        <h2 style="margin-bottom: 1.5rem;">Lini Masa Pekerjaan</h2>
+    <!-- Lini Masa Pekerjaan Card -->
+    <div class="card" style="margin-bottom: 0;">
+        <h2 class="card-title">Lini Masa Pekerjaan</h2>
         
-        <div style="display: flex; flex-direction: column; gap: 1.5rem; position: relative;">
-            <div style="position: absolute; left: 11px; top: 10px; bottom: 10px; width: 2px; background-color: var(--border-color); z-index: 0;"></div>
+        <div style="display: flex; flex-direction: column; gap: 1.5rem; position: relative; padding-left: 1rem;">
+            <div style="position: absolute; left: 16px; top: 10px; bottom: 10px; width: 2px; background-color: var(--color-border); z-index: 0;"></div>
             
-            <div style="display: flex; gap: 1rem; position: relative; z-index: 1;">
-                <div style="width: 24px; height: 24px; border-radius: 50%; background-color: {% if job.queued_at %}var(--status-success){% else %}var(--border-color){% endif %}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px;">
-                    <div style="width: 10px; height: 10px; border-radius: 50%; background-color: var(--bg-panel);"></div>
-                </div>
+            <div style="display: flex; gap: 1.25rem; position: relative; z-index: 1;">
+                <div style="width: 14px; height: 14px; border-radius: 50%; background-color: {% if job.queued_at %}var(--status-success){% else %}var(--color-border){% endif %}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 6px;"></div>
                 <div>
-                    <h4 style="margin-bottom: 0.25rem;">Masuk ke Antrean (Queued)</h4>
-                    <p class="text-sm text-muted">{{ job.queued_at | local_datetime if job.queued_at else '-' }}</p>
+                    <h4 style="font-size: 0.9375rem; font-weight: 700; margin-bottom: 0.125rem;">Masuk ke Antrean (Queued)</h4>
+                    <p class="text-xs text-muted">{{ job.queued_at | local_datetime if job.queued_at else '-' }}</p>
                 </div>
             </div>
             
-            <div style="display: flex; gap: 1rem; position: relative; z-index: 1;">
-                <div style="width: 24px; height: 24px; border-radius: 50%; background-color: {% if job.started_at %}var(--status-success){% else %}var(--border-color){% endif %}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px;">
-                    <div style="width: 10px; height: 10px; border-radius: 50%; background-color: var(--bg-panel);"></div>
-                </div>
+            <div style="display: flex; gap: 1.25rem; position: relative; z-index: 1;">
+                <div style="width: 14px; height: 14px; border-radius: 50%; background-color: {% if job.started_at %}var(--status-success){% else %}var(--color-border){% endif %}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 6px;"></div>
                 <div>
-                    <h4 style="margin-bottom: 0.25rem;">Mulai Diproses (Started)</h4>
-                    <p class="text-sm text-muted">{{ job.started_at | local_datetime if job.started_at else 'Belum dimulai' }}</p>
+                    <h4 style="font-size: 0.9375rem; font-weight: 700; margin-bottom: 0.125rem;">Mulai Diproses (Started)</h4>
+                    <p class="text-xs text-muted">{{ job.started_at | local_datetime if job.started_at else 'Belum dimulai' }}</p>
                 </div>
             </div>
             
-            <div style="display: flex; gap: 1rem; position: relative; z-index: 1;">
-                <div style="width: 24px; height: 24px; border-radius: 50%; background-color: {% if job.completed_at %}var(--status-success){% elif job.status == 'failed' %}var(--status-danger){% else %}var(--border-color){% endif %}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px;">
-                    <div style="width: 10px; height: 10px; border-radius: 50%; background-color: var(--bg-panel);"></div>
-                </div>
+            <div style="display: flex; gap: 1.25rem; position: relative; z-index: 1;">
+                <div style="width: 14px; height: 14px; border-radius: 50%; background-color: {% if job.completed_at %}var(--status-success){% elif job.status == 'failed' %}var(--status-danger){% else %}var(--color-border){% endif %}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 6px;"></div>
                 <div>
-                    <h4 style="margin-bottom: 0.25rem;">Selesai ({{ job.status }})</h4>
-                    <p class="text-sm text-muted">{{ job.completed_at | local_datetime if job.completed_at else 'Masih dalam proses' }}</p>
+                    <h4 style="font-size: 0.9375rem; font-weight: 700; margin-bottom: 0.125rem;">Selesai</h4>
+                    <p class="text-xs text-muted">{{ job.completed_at | local_datetime if job.completed_at else 'Masih dalam proses' }}</p>
                 </div>
             </div>
         </div>
@@ -149,14 +151,14 @@
 </div>
 
 <div class="card">
-    <div class="page-header" style="margin-bottom: 1rem;">
-        <h2>Daftar Item Media</h2>
+    <div class="page-header" style="margin-bottom: 1.5rem;">
+        <h2 style="font-size: 1.25rem;">Daftar Item Media</h2>
     </div>
     <div class="table-container">
         <table>
             <thead>
                 <tr>
-                    <th>#</th>
+                    <th style="width: 50px;">#</th>
                     <th>Tipe Media</th>
                     <th>Status Item</th>
                     <th>Pengiriman Gateway</th>
@@ -185,18 +187,36 @@
                             <span class="text-muted">-</span>
                         {% endif %}
                         
-                        <details style="margin-top: 0.5rem; margin-bottom: 0;">
-                            <summary style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: transparent; border: none;">Detail Gateway</summary>
-                            <div class="details-content" style="padding: 0.5rem; font-size: 0.75rem;">
-                                <div><strong>Msg ID:</strong> <code style="word-break: break-all;">{{ item.gateway_message_id or '-' }}</code></div>
-                                <div><strong>Queue:</strong> {{ item.gateway_queue_status or '-' }}</div>
-                                <div><strong>Delivered:</strong> {{ item.gateway_delivered_at | local_datetime if item.gateway_delivered_at else '-' }}</div>
-                                <div><strong>Read:</strong> {{ item.gateway_read_at | local_datetime if item.gateway_read_at else '-' }}</div>
+                        <details style="margin-top: 0.5rem; margin-bottom: 0; background-color: #f8fafc; border-color: var(--color-border);">
+                            <summary style="padding: 0.375rem 0.75rem; font-size: 0.75rem; background: transparent; border: none; color: var(--color-accent);">Detail Gateway</summary>
+                            <div class="details-content" style="padding: 0.75rem; font-size: 0.75rem; background-color: var(--surface);">
+                                <div class="data-row">
+                                    <div class="data-label" style="width: 100px;">Msg ID</div>
+                                    <div class="data-val"><code>{{ item.gateway_message_id or '-' }}</code></div>
+                                </div>
+                                <div class="data-row">
+                                    <div class="data-label" style="width: 100px;">Queue</div>
+                                    <div class="data-val">{{ item.gateway_queue_status or '-' }}</div>
+                                </div>
+                                <div class="data-row">
+                                    <div class="data-label" style="width: 100px;">Delivered</div>
+                                    <div class="data-val">{{ item.gateway_delivered_at | local_datetime if item.gateway_delivered_at else '-' }}</div>
+                                </div>
+                                <div class="data-row">
+                                    <div class="data-label" style="width: 100px;">Read</div>
+                                    <div class="data-val">{{ item.gateway_read_at | local_datetime if item.gateway_read_at else '-' }}</div>
+                                </div>
                             </div>
                         </details>
                     </td>
-                    <td>{{ (item.final_size_bytes / 1024)|round(1) }} KB</td>
-                    <td class="text-danger">{{ item.error_message or '-' }}</td>
+                    <td>
+                        {% if item.final_size_bytes %}
+                            {{ (item.final_size_bytes / 1024)|round(1) }} KB
+                        {% else %}
+                            -
+                        {% endif %}
+                    </td>
+                    <td class="text-danger" style="font-size: 0.8125rem;">{{ item.error_message or '-' }}</td>
                 </tr>
                 {% else %}
                 <tr>

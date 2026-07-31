@@ -5,13 +5,13 @@
 {% block content %}
 <div class="page-header">
     <div>
-        <h1 class="page-title">Riwayat Pemrosesan & Antrean Pekerjaan</h1>
-        <p class="text-muted mt-4">Filter dan pantau setiap proses unduhan dan pengiriman media TikTok & Instagram ke WhatsApp</p>
+        <h1 class="page-title">Riwayat Pemrosesan</h1>
+        <p class="text-muted mt-2">Filter dan pantau setiap proses unduhan dan pengiriman media TikTok & Instagram ke WhatsApp</p>
     </div>
 </div>
 
 <div class="card" style="margin-bottom: 2rem;">
-    <form action="/admin/history" method="get" class="search-form" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; align-items: end;">
+    <form action="/admin/history" method="get" class="search-form" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.25rem; align-items: end;">
         <div class="form-group" style="margin-bottom: 0;">
             <label for="platform" class="form-label">Platform</label>
             <select id="platform" name="platform" class="form-control">
@@ -59,8 +59,11 @@
 </div>
 
 <div class="card">
-    <div class="page-header" style="margin-bottom: 1rem;">
-        <h2>Daftar Pekerjaan <span class="badge badge-neutral">{{ total_count }}</span></h2>
+    <div class="page-header" style="margin-bottom: 1.5rem;">
+        <h2 style="font-size: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
+            Daftar Pekerjaan
+            <span class="badge badge-neutral" style="font-size: 0.8125rem; padding: 0.125rem 0.5rem;">{{ total_count }}</span>
+        </h2>
     </div>
     <div class="table-container">
         <table>
@@ -79,7 +82,7 @@
             <tbody>
                 {% for job in jobs %}
                 <tr>
-                    <td><span class="text-muted">{{ job.created_at | local_datetime }}</span></td>
+                    <td><span class="text-muted text-sm">{{ job.created_at | local_datetime }}</span></td>
                     <td>
                         {% if job.platform == 'instagram' %}
                         <span class="badge badge-warning">Instagram</span>
@@ -89,16 +92,16 @@
                     </td>
                     <td><span class="badge badge-neutral">{{ job.sender_number }}</span></td>
                     <td>
-                        <a href="{{ job.original_url }}" target="_blank" rel="noopener noreferrer">
-                            {{ job.original_url[:30] }}{% if job.original_url|length > 30 %}...{% endif %}
+                        <a href="{{ job.original_url }}" target="_blank" rel="noopener noreferrer" style="font-size: 0.875rem;">
+                            {{ job.original_url[:35] }}{% if job.original_url|length > 35 %}...{% endif %}
                         </a>
                     </td>
                     <td><span class="badge badge-neutral">{{ job.content_type or '-' }}</span></td>
                     <td>
                         {% if job.failed_count > 0 %}
-                            <span class="text-danger">{{ job.sent_count }} / {{ job.media_count }} ({{ job.failed_count }} gagal)</span>
+                            <span class="text-danger" style="font-weight: 600;">{{ job.sent_count }} / {{ job.media_count }} ({{ job.failed_count }} gagal)</span>
                         {% elif job.sent_count == job.media_count and job.media_count > 0 %}
-                            <span class="text-success">{{ job.sent_count }} / {{ job.media_count }} terkirim</span>
+                            <span class="text-success" style="font-weight: 600;">{{ job.sent_count }} / {{ job.media_count }} terkirim</span>
                         {% else %}
                             <span class="text-muted">{{ job.sent_count }} / {{ job.media_count }} terkirim</span>
                         {% endif %}
@@ -133,7 +136,7 @@
         <a href="?page={{ page - 1 }}&platform={{ filter_platform }}&phone_number={{ filter_phone }}&status={{ filter_status }}&content_type={{ filter_type }}&search={{ filter_search }}" class="page-link">&laquo;</a>
         {% endif %}
         
-        <span class="text-muted" style="margin: 0 1rem;">Halaman {{ page }} dari {{ total_pages }}</span>
+        <span class="text-muted text-sm" style="margin: 0 1rem; font-weight: 500;">Halaman {{ page }} dari {{ total_pages }}</span>
 
         {% if page < total_pages %}
         <a href="?page={{ page + 1 }}&platform={{ filter_platform }}&phone_number={{ filter_phone }}&status={{ filter_status }}&content_type={{ filter_type }}&search={{ filter_search }}" class="page-link">&raquo;</a>

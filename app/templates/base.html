@@ -17,7 +17,7 @@
         <aside class="sidebar">
             <div class="sidebar-header">
                 <div class="sidebar-title">Farros Media Bot</div>
-                <div class="text-sm text-muted mt-4">PROD ENVIRONMENT</div>
+                <div class="env-label">PROD ENVIRONMENT</div>
             </div>
             <ul class="nav-list">
                 <li class="nav-item">
@@ -36,11 +36,11 @@
                     <a href="/admin/settings" class="nav-link {% if '/settings' in request.url.path %}active{% endif %}">Pengaturan</a>
                 </li>
             </ul>
-            <div style="padding: 1.5rem; border-top: 1px solid var(--border-color);">
-                <div class="text-sm mb-4">👤 {{ admin.username }}</div>
+            <div class="sidebar-footer">
+                <div class="sidebar-user">{{ admin.username }}</div>
                 <form action="/admin/logout" method="post">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="btn btn-secondary" style="width: 100%;">Logout</button>
+                    <button type="submit" class="btn btn-secondary" style="width: 100%;">Keluar</button>
                 </form>
             </div>
         </aside>

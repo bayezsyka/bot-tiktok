@@ -3,17 +3,16 @@
 {% block title %}Login - Farros Media Bot{% endblock %}
 
 {% block content %}
-<div style="display: flex; min-height: 100vh; align-items: center; justify-content: center; background-color: var(--bg-base); position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 100;">
-    <div class="card" style="width: 100%; max-width: 400px; padding: 2rem;">
+<div style="display: flex; min-height: 100vh; align-items: center; justify-content: center; background-color: var(--page-bg); position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 100;">
+    <div class="card" style="width: 100%; max-width: 400px; padding: 2.5rem; box-shadow: var(--shadow-lg); border-radius: var(--radius-lg);">
         <div style="text-align: center; margin-bottom: 2rem;">
-            <div style="font-size: 3rem; margin-bottom: 1rem; color: var(--accent-primary);">⚡</div>
-            <h1 style="font-size: 1.5rem; margin-bottom: 0.5rem;">Farros Media Bot</h1>
-            <p class="text-muted">Admin Portal Login</p>
+            <div style="font-weight: 800; font-size: 1.5rem; color: var(--color-primary); letter-spacing: -0.03em; margin-bottom: 0.25rem;">Farros Media Bot</div>
+            <p class="text-muted" style="font-size: 0.875rem;">Admin Portal Login</p>
         </div>
 
         {% if error %}
-        <div style="background-color: rgba(239, 68, 68, 0.1); color: var(--status-danger); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; border: 1px solid rgba(239, 68, 68, 0.2); font-size: 0.875rem;">
-            ⚠️ {{ error }}
+        <div class="badge badge-danger" style="display: block; width: 100%; padding: 0.75rem 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; font-size: 0.875rem; text-transform: none; letter-spacing: normal; text-align: left; line-height: 1.4;">
+            {{ error }}
         </div>
         {% endif %}
 
@@ -27,7 +26,7 @@
                 <label for="password" class="form-label">Password</label>
                 <input type="password" id="password" name="password" class="form-control" required autocomplete="current-password" placeholder="Masukkan password">
             </div>
-            <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.75rem; font-size: 1rem;">Masuk ke Dashboard</button>
+            <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.75rem; font-size: 0.9375rem;">Masuk ke Dashboard</button>
         </form>
     </div>
 </div>
