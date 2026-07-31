@@ -209,10 +209,10 @@ class FarrosWAGatewayClient:
         except GatewayResponseError as e:
             if e.status_code == 404:
                 return GatewayMessageResponse(
-                    status="ok",
+                    status="not_found",
                     http_status=404,
-                    delivery_status="delivery_unknown",
-                    data={"error_message": "Message not found in Gateway (404)"}
+                    delivery_status=None,
+                    data={"error_code": "MESSAGE_NOT_FOUND", "error_message": "Message not found in Gateway (404)"}
                 )
             if e.status_code in (401, 403):
                 logger.error("Gateway authentication/authorization error. Check API key.")

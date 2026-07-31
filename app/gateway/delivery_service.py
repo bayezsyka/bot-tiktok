@@ -36,6 +36,7 @@ class GatewayDeliveryService:
         d_status: str | None = None,
         q_status: str | None = None,
         error_message: str | None = None,
+        error_code: str | None = None,
     ) -> None:
         """
         Process outbound status idempotently and monotonically.
@@ -44,24 +45,45 @@ class GatewayDeliveryService:
 
         # Handle Queue Status
         if q_status:
-            if q_status in ("failed", "cancelled"):
-                item.gateway_queue_status = q_status
-                if item.status != "completed":
-                    item.status = q_status
+            if q_status == "failed":
+                if item.status == "completed":
+                    logger.warning(f"Anomaly: Received q_status='failed' for already completed item {item.id}")
+                else:
+                    item.gateway_queue_status = "failed"
+                    item.status = "failed"
+                    item.gateway_error_code = error_code or "GATEWAY_DELIVERY_FAILED"
+                    item.gateway_error_message = error_message
+                    item.error_message = error_message
+                    if not item.gateway_failed_at:
+                        item.gateway_failed_at = utc_now()
+            elif q_status == "cancelled":
+                if item.status == "completed":
+                    logger.warning(f"Anomaly: Received q_status='cancelled' for already completed item {item.id}")
+                else:
+                    item.gateway_queue_status = "cancelled"
+                    item.status = "cancelled"
+                    item.gateway_error_code = error_code or "GATEWAY_CANCELLED"
+                    item.gateway_error_message = error_message
+                    item.error_message = error_message
+                    if not item.gateway_failed_at:
+                        item.gateway_failed_at = utc_now()
             else:
-                old_q_rank = QUEUE_RANKS.get(item.gateway_queue_status or "", 0)
-                new_q_rank = QUEUE_RANKS.get(q_status, 0)
-                if new_q_rank >= old_q_rank:
-                    item.gateway_queue_status = q_status
-                    if item.status not in ("completed", "failed", "cancelled"):
-                        if q_status == "sent":
-                            item.status = "sent"
-                            if not item.gateway_sent_at:
-                                item.gateway_sent_at = utc_now()
-                        elif q_status == "processing":
-                            item.status = "gateway_processing"
-                        elif q_status in ("queued", "scheduled"):
-                            item.status = "gateway_queued"
+                if item.status == "completed":
+                    logger.warning(f"Anomaly: Received q_status='{q_status}' for already completed item {item.id}")
+                else:
+                    old_q_rank = QUEUE_RANKS.get(item.gateway_queue_status or "", 0)
+                    new_q_rank = QUEUE_RANKS.get(q_status, 0)
+                    if new_q_rank >= old_q_rank:
+                        item.gateway_queue_status = q_status
+                        if item.status not in ("failed", "cancelled"):
+                            if q_status == "sent":
+                                item.status = "sent"
+                                if not item.gateway_sent_at:
+                                    item.gateway_sent_at = utc_now()
+                            elif q_status == "processing":
+                                item.status = "gateway_processing"
+                            elif q_status in ("queued", "scheduled"):
+                                item.status = "gateway_queued"
 
         # Handle Delivery Status
         if d_status:

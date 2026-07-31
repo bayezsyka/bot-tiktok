@@ -62,3 +62,40 @@ async def test_delivery_unknown(mock_db, item):
     assert item.gateway_delivery_status is None
     assert item.status == "delivery_unknown"
     assert item.gateway_error_code == "MESSAGE_NOT_FOUND"
+
+@pytest.mark.asyncio
+async def test_queue_failed_status_stores_details(mock_db, item):
+    service = GatewayDeliveryService(mock_db)
+
+    with patch.object(service, "sync_job_status", new_callable=AsyncMock):
+        await service.process_outbound_status(
+            item,
+            q_status="failed",
+            error_code="TEST_ERROR_CODE",
+            error_message="Test failure message"
+        )
+    assert item.gateway_queue_status == "failed"
+    assert item.status == "failed"
+    assert item.gateway_error_code == "TEST_ERROR_CODE"
+    assert item.gateway_error_message == "Test failure message"
+    assert item.error_message == "Test failure message"
+    assert item.gateway_failed_at is not None
+
+@pytest.mark.asyncio
+async def test_queue_failed_status_after_completed_ignored(mock_db, item):
+    service = GatewayDeliveryService(mock_db)
+
+    with patch.object(service, "sync_job_status", new_callable=AsyncMock):
+        # Mark as completed
+        await service.process_outbound_status(item, d_status="delivered")
+        assert item.status == "completed"
+
+        # Delayed failed event comes in
+        await service.process_outbound_status(
+            item,
+            q_status="failed",
+            error_code="TEST_ERROR_CODE",
+            error_message="Test failure message"
+        )
+        assert item.status == "completed"  # Remains completed
+        assert item.gateway_queue_status != "failed"  # Unchanged

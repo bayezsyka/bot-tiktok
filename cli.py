@@ -234,7 +234,7 @@ async def reconcile_gateway_cmd(args: argparse.Namespace) -> None:
 
     from app.database.models import DownloadItem, utc_now
     from app.queue.reconciler import GatewayReconciler
-    from sqlalchemy import select
+    from sqlalchemy import or_, select
 
     print(f"Reconciling gateway statuses for jobs within the last {args.days} days...")
 
@@ -246,7 +246,10 @@ async def reconcile_gateway_cmd(args: argparse.Namespace) -> None:
                 DownloadItem.gateway_message_id.isnot(None),
                 DownloadItem.created_at >= cutoff,
                 DownloadItem.status.in_(["gateway_queued", "gateway_processing", "sent", "delivery_unknown"]),
-                DownloadItem.gateway_delivery_status.notin_(["read", "played", "delivered", "failed"])
+                or_(
+                    DownloadItem.gateway_delivery_status.is_(None),
+                    DownloadItem.gateway_delivery_status.notin_(["read", "played", "delivered"])
+                )
             )
         )
         res = await session.execute(stmt)
@@ -257,11 +260,11 @@ async def reconcile_gateway_cmd(args: argparse.Namespace) -> None:
             return
 
         print(f"Found {len(items)} items to reconcile. Syncing...")
+        item_ids = [item.id for item in items]
 
     from app.database.connection import get_session_maker
     reconciler = GatewayReconciler(get_session_maker())
-    reconciler.batch_size = len(items)
-    await reconciler._reconcile_batch(include_unknown=True)
+    await reconciler.reconcile_item_ids(item_ids)
 
     print("✅ Gateway reconciliation completed.")
 

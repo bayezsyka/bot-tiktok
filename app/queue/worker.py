@@ -274,7 +274,21 @@ class QueueWorker:
                     idempotency_key=idemp_key,
                 )
 
-                # Set message ID
+                # Set message ID and validate
+                if not response.message_id:
+                    logger.error(f"[Stage: Sending] Upload succeeded but gateway did not return a message ID for item {item.id} of job {job.id}")
+                    from app.gateway.delivery_service import GatewayDeliveryService
+                    delivery_service = GatewayDeliveryService(session)
+                    await delivery_service.process_outbound_status(
+                        item=item,
+                        q_status="failed",
+                        error_code="GATEWAY_INVALID_RESPONSE",
+                        error_message="Gateway menerima upload tetapi tidak memberikan message ID"
+                    )
+                    failed_count += 1
+                    await session.commit()
+                    continue
+
                 item.gateway_message_id = response.message_id
 
                 from app.gateway.delivery_service import GatewayDeliveryService

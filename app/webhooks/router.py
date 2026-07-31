@@ -63,6 +63,7 @@ async def _handle_outbound_status_event(db: AsyncSession, event_type: str, paylo
     q_status = None
     d_status = None
     error_message = data.get("error_message") or data.get("error")
+    error_code = data.get("error_code") or data.get("code")
 
     if event_type == "message.sent":
         q_status = "sent"
@@ -82,7 +83,8 @@ async def _handle_outbound_status_event(db: AsyncSession, event_type: str, paylo
         item=item,
         d_status=d_status,
         q_status=q_status,
-        error_message=error_message
+        error_message=error_message,
+        error_code=error_code
     )
 
 @router.post("/farros-wa", response_model=WebhookEventResponse)
