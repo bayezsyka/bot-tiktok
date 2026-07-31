@@ -1,19 +1,19 @@
 {% extends "base.html" %}
 
-{% block title %}Login - Farros TikTok Bot{% endblock %}
+{% block title %}Login - Farros Media Bot{% endblock %}
 
 {% block content %}
 <div class="login-wrapper">
     <div class="login-card">
         <div class="login-header">
             <div class="brand-logo">⚡</div>
-            <h1>Farros TikTok Bot</h1>
+            <h1>Farros Media Bot</h1>
             <p>Admin Portal Login</p>
         </div>
 
         {% if error %}
         <div class="alert alert-error">
-            <span>{{ error }}</span>
+            <span>⚠️ {{ error }}</span>
         </div>
         {% endif %}
 

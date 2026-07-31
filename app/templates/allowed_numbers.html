@@ -5,24 +5,61 @@
 {% block content %}
 <div class="dashboard-header">
     <h1>Manajemen Nomor WhatsApp Diizinkan</h1>
-    <p class="subtitle">Kelola daftar nomor WhatsApp dan pemetaan LID (Linked Identifier)</p>
+    <p class="subtitle">Kelola daftar nomor WhatsApp dan pemetaan LID (Linked Identifier) untuk akses bot</p>
 </div>
 
 {% if error %}
-<div class="alert alert-error"><span>{{ error }}</span></div>
+<div class="alert alert-error"><span>⚠️ {{ error }}</span></div>
 {% endif %}
 {% if success %}
-<div class="alert alert-success"><span>{{ success }}</span></div>
+<div class="alert alert-success"><span>✅ {{ success }}</span></div>
 {% endif %}
 
-<div class="card search-card" style="margin-bottom: 20px;">
-    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px;">
-        <form action="/admin/allowed-numbers" method="get" class="filter-form" style="display: flex; gap: 10px; flex: 1;">
-            <input type="text" name="search" value="{{ search }}" placeholder="Cari nama, nomor, atau LID..." style="flex: 1; max-width: 400px; padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color, #333); background: var(--bg-card, #1a1a1a); color: var(--text-color, #fff);">
-            <button type="submit" class="btn btn-primary">Cari</button>
-            {% if search %}
-            <a href="/admin/allowed-numbers" class="btn btn-secondary">Reset</a>
-            {% endif %}
+<!-- Summary Stat Cards -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-icon icon-active">📱</div>
+        <div class="stat-info">
+            <span class="stat-label">Total Nomor</span>
+            <span class="stat-value">{{ total_count }}</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon icon-success">✅</div>
+        <div class="stat-info">
+            <span class="stat-label">Nomor Aktif</span>
+            <span class="stat-value">{{ numbers|selectattr("is_active")|list|length }}</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon icon-danger">🛑</div>
+        <div class="stat-info">
+            <span class="stat-label">Nonaktif</span>
+            <span class="stat-value">{{ numbers|rejectattr("is_active")|list|length }}</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon icon-queue">🔗</div>
+        <div class="stat-info">
+            <span class="stat-label">Memiliki LID</span>
+            <span class="stat-value">{{ numbers|selectattr("lid_number")|list|length }}</span>
+        </div>
+    </div>
+</div>
+
+<!-- Search & Import Actions Bar -->
+<div class="card filter-bar">
+    <div class="flex-header">
+        <form action="/admin/allowed-numbers" method="get" class="filter-form" style="flex: 1;">
+            <div class="filter-group" style="flex: 2;">
+                <input type="text" name="search" value="{{ search }}" placeholder="Cari nama, nomor WhatsApp (628...), atau LID...">
+            </div>
+            <div class="filter-actions">
+                <button type="submit" class="btn btn-primary">🔍 Cari</button>
+                {% if search %}
+                <a href="/admin/allowed-numbers" class="btn btn-secondary">Reset</a>
+                {% endif %}
+            </div>
         </form>
         {% if env_preview %}
         <form action="/admin/allowed-numbers/import-env" method="post" class="inline-form" onsubmit="return confirm('Impor seluruh mapping LID valid dari environment (FARROS_WA_LID_MAP)?');">
@@ -34,35 +71,37 @@
 </div>
 
 <div class="grid-layout">
-    <div class="card form-section">
+    <!-- Form Tambah Nomor Card -->
+    <div class="card">
         <div class="card-header">
-            <h2>Tambah Nomor Baru</h2>
+            <h2>+ Tambah Nomor Baru</h2>
         </div>
         <form action="/admin/allowed-numbers" method="post" class="standard-form">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <div class="form-group">
-                <label for="name">Nama Pengguna <span class="required">*</span></label>
+                <label for="name">Nama Pengguna / Divisi <span class="required">*</span></label>
                 <input type="text" id="name" name="name" required placeholder="Contoh: Farros Sangkolo">
             </div>
             <div class="form-group">
                 <label for="phone_number">Nomor WhatsApp <span class="required">*</span></label>
                 <input type="text" id="phone_number" name="phone_number" required placeholder="Contoh: 6281234567890">
-                <small class="form-text">Format 628... (10-15 digit).</small>
+                <span class="form-text">Format 628... (10-15 digit).</span>
             </div>
             <div class="form-group">
                 <label for="lid_number">LID WhatsApp (Opsional)</label>
                 <input type="text" id="lid_number" name="lid_number" placeholder="Contoh: 12345678901234">
-                <small class="form-text">Hanya angka digit tanpa @lid.</small>
+                <span class="form-text">Masukkan angka digit LID tanpa akhiran @lid.</span>
             </div>
             <div class="form-group">
                 <label for="notes">Catatan (Opsional)</label>
-                <textarea id="notes" name="notes" rows="2" placeholder="Keterangan tambahan atau divisi"></textarea>
+                <textarea id="notes" name="notes" rows="3" placeholder="Keterangan tambahan atau catatan pemilik"></textarea>
             </div>
-            <button type="submit" class="btn btn-primary btn-block">+ Simpan Nomor</button>
+            <button type="submit" class="btn btn-primary btn-block">+ Simpan Nomor Whitelist</button>
         </form>
     </div>
 
-    <div class="card list-section">
+    <!-- Tabel Nomor Whitelist Card -->
+    <div class="card">
         <div class="card-header">
             <h2>Daftar Nomor Terdaftar (Total: {{ total_count }})</h2>
         </div>
@@ -82,21 +121,28 @@
                 <tbody>
                     {% for num in numbers %}
                     <tr>
-                        <td><strong>{{ num.name }}</strong><br><small class="text-muted">{{ num.notes or '' }}</small></td>
+                        <td>
+                            <strong>{{ num.name }}</strong>
+                            {% if num.notes %}
+                            <br><small class="text-muted">{{ num.notes }}</small>
+                            {% endif %}
+                        </td>
                         <td><span class="badge badge-phone">{{ num.phone_number }}</span></td>
                         <td>
                             {% if num.lid_number %}
-                            <span class="badge badge-lid" style="background: rgba(139, 92, 246, 0.2); color: #a78bfa; padding: 3px 8px; border-radius: 4px; font-family: monospace;">{{ num.lid_number }}</span>
-                            <form action="/admin/allowed-numbers/{{ num.id }}/remove-lid" method="post" class="inline-form" onsubmit="return confirm('Hapus mapping LID dari nomor ini?');">
-                                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                                <button type="submit" class="btn btn-xs btn-outline-danger" title="Hapus LID">✕</button>
-                            </form>
+                            <div style="display: flex; align-items: center; gap: 0.35rem;">
+                                <span class="badge badge-lid">{{ num.lid_number }}</span>
+                                <form action="/admin/allowed-numbers/{{ num.id }}/remove-lid" method="post" class="inline-form" onsubmit="return confirm('Hapus mapping LID dari nomor ini?');">
+                                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" class="btn btn-xs btn-danger" title="Hapus LID">✕</button>
+                                </form>
+                            </div>
                             {% else %}
                             <span class="text-muted">-</span>
                             {% endif %}
                         </td>
-                        <td>{{ num.total_jobs }}</td>
-                        <td>{{ num.last_used_at.strftime('%Y-%m-%d %H:%M') if num.last_used_at else '-' }}</td>
+                        <td><strong>{{ num.total_jobs }}</strong></td>
+                        <td><small class="text-muted">{{ num.last_used_at.strftime('%Y-%m-%d %H:%M') if num.last_used_at else '-' }}</small></td>
                         <td>
                             <form action="/admin/allowed-numbers/{{ num.id }}/toggle" method="post" class="inline-form">
                                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
@@ -106,17 +152,15 @@
                             </form>
                         </td>
                         <td>
-                            <div style="display: flex; gap: 5px;">
-                                <form action="/admin/allowed-numbers/{{ num.id }}/delete" method="post" class="inline-form" onsubmit="return confirm('Apakah Anda yakin ingin menghapus nomor ini dari whitelist?');">
-                                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                                    <button type="submit" class="btn btn-danger btn-xs">Hapus</button>
-                                </form>
-                            </div>
+                            <form action="/admin/allowed-numbers/{{ num.id }}/delete" method="post" class="inline-form" onsubmit="return confirm('Apakah Anda yakin ingin menghapus nomor ini dari whitelist?');">
+                                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                                <button type="submit" class="btn btn-danger btn-xs">Hapus</button>
+                            </form>
                         </td>
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="7" class="text-center empty-state">Belum ada nomor dalam whitelist.</td>
+                        <td colspan="7" class="text-center empty-state">Belum ada nomor WhatsApp dalam whitelist.</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -124,9 +168,9 @@
         </div>
 
         {% if total_pages > 1 %}
-        <div class="pagination" style="display: flex; justify-content: center; gap: 8px; margin-top: 15px;">
+        <div class="pagination">
             {% for p in range(1, total_pages + 1) %}
-            <a href="/admin/allowed-numbers?page={{ p }}&search={{ search }}" class="btn btn-xs {% if p == page %}btn-primary{% else %}btn-secondary{% endif %}">{{ p }}</a>
+            <a href="/admin/allowed-numbers?page={{ p }}&search={{ search }}" class="page-link {% if p == page %}btn-primary{% endif %}">{{ p }}</a>
             {% endfor %}
         </div>
         {% endif %}

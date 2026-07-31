@@ -19,12 +19,20 @@
                 <span class="brand-badge">PROD</span>
                 <a href="/admin">Farros Media Bot</a>
             </div>
+            <button class="nav-toggle" aria-label="Toggle Navigation">☰</button>
             <nav class="nav-links">
                 <a href="/admin" class="nav-item {% if request.url.path == '/admin' or request.url.path == '/admin/' %}active{% endif %}">Dashboard</a>
                 <a href="/admin/allowed-numbers" class="nav-item {% if '/allowed-numbers' in request.url.path or '/numbers' in request.url.path %}active{% endif %}">Nomor Diizinkan</a>
                 <a href="/admin/unmapped-lids" class="nav-item {% if '/unmapped-lids' in request.url.path %}active{% endif %}">LID Belum Dipetakan</a>
                 <a href="/admin/history" class="nav-item {% if '/history' in request.url.path %}active{% endif %}">Riwayat Job</a>
                 <a href="/admin/settings" class="nav-item {% if '/settings' in request.url.path %}active{% endif %}">Pengaturan</a>
+                <div class="mobile-user-section">
+                    <span class="username">👤 {{ admin.username }}</span>
+                    <form action="/admin/logout" method="post" class="inline-form">
+                        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                        <button type="submit" class="btn-logout" style="width: 100%;">Logout</button>
+                    </form>
+                </div>
             </nav>
             <div class="nav-user">
                 <span class="username">👤 {{ admin.username }}</span>

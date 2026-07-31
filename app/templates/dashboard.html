@@ -8,52 +8,67 @@
     <p class="subtitle">Real-time status pemrosesan media TikTok & Instagram Reels dan gateway WhatsApp</p>
 </div>
 
+<!-- 8 Stat Cards System -->
 <div class="stats-grid">
     <div class="stat-card">
-        <div class="stat-icon icon-active">📱</div>
+        <div class="stat-icon icon-queue">📊</div>
         <div class="stat-info">
-            <span class="stat-label">Nomor Whitelist Aktif</span>
-            <span class="stat-value">{{ active_numbers }}</span>
+            <span class="stat-label">Total Job</span>
+            <span class="stat-value">{{ stats.total_jobs }}</span>
         </div>
     </div>
     <div class="stat-card">
-        <div class="stat-icon icon-warning" style="background: rgba(234, 179, 8, 0.2); color: #eab308;">⚠️</div>
+        <div class="stat-icon" style="background: rgba(0, 242, 254, 0.15); color: #00f2fe;">🎵</div>
         <div class="stat-info">
-            <span class="stat-label">LID Belum Dipetakan</span>
-            <span class="stat-value"><a href="/admin/unmapped-lids" style="color: inherit; text-decoration: underline;">{{ unmapped_count }}</a></span>
+            <span class="stat-label">TikTok</span>
+            <span class="stat-value">{{ stats.tiktok_jobs }}</span>
         </div>
     </div>
     <div class="stat-card">
-        <div class="stat-icon icon-queue">⚡</div>
+        <div class="stat-icon" style="background: rgba(236, 72, 153, 0.15); color: #ec4899;">📷</div>
         <div class="stat-info">
-            <span class="stat-label">Job Aktif / Antrean</span>
-            <span class="stat-value">{{ stats.active_jobs }}</span>
+            <span class="stat-label">Instagram</span>
+            <span class="stat-value">{{ stats.instagram_jobs }}</span>
         </div>
     </div>
     <div class="stat-card">
         <div class="stat-icon icon-success">✅</div>
         <div class="stat-info">
-            <span class="stat-label">Job Selesai</span>
+            <span class="stat-label">Sukses</span>
             <span class="stat-value">{{ stats.completed_jobs }}</span>
         </div>
     </div>
     <div class="stat-card">
         <div class="stat-icon icon-danger">❌</div>
         <div class="stat-info">
-            <span class="stat-label">Job Gagal</span>
+            <span class="stat-label">Gagal</span>
             <span class="stat-value">{{ stats.failed_jobs }}</span>
         </div>
     </div>
     <div class="stat-card">
-        <div class="stat-icon" style="background: rgba(236, 72, 153, 0.2); color: #ec4899;">📊</div>
+        <div class="stat-icon" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24;">⚡</div>
         <div class="stat-info">
-            <span class="stat-label">TikTok / Instagram</span>
-            <span class="stat-value">{{ stats.tiktok_jobs }} / {{ stats.instagram_jobs }}</span>
+            <span class="stat-label">Sedang Diproses</span>
+            <span class="stat-value">{{ stats.active_jobs }}</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon icon-active">📱</div>
+        <div class="stat-info">
+            <span class="stat-label">Nomor Aktif</span>
+            <span class="stat-value">{{ active_numbers }}</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-icon" style="background: rgba(234, 179, 8, 0.15); color: #eab308;">⚠️</div>
+        <div class="stat-info">
+            <span class="stat-label">LID Belum Dipetakan</span>
+            <span class="stat-value"><a href="/admin/unmapped-lids">{{ unmapped_count }}</a></span>
         </div>
     </div>
 </div>
 
-<div class="card recent-section">
+<div class="card">
     <div class="card-header">
         <h2>10 Aktivitas Terbaru</h2>
         <a href="/admin/history" class="btn btn-secondary btn-sm">Lihat Semua Riwayat</a>
@@ -74,12 +89,12 @@
             <tbody>
                 {% for job in recent_jobs %}
                 <tr>
-                    <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                    <td><small class="text-muted">{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</small></td>
                     <td>
                         {% if job.platform == 'instagram' %}
-                        <span class="badge" style="background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888); color: #fff; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 11px;">Instagram</span>
+                        <span class="badge" style="background: var(--instagram-gradient); color: #fff;">Instagram</span>
                         {% else %}
-                        <span class="badge" style="background: #000; color: #00f2fe; border: 1px solid #00f2fe; padding: 3px 8px; border-radius: 4px; font-weight: 600; font-size: 11px;">TikTok</span>
+                        <span class="badge" style="background: #000; color: var(--tiktok-accent); border: 1px solid var(--tiktok-accent);">TikTok</span>
                         {% endif %}
                     </td>
                     <td><span class="badge badge-phone">{{ job.sender_number }}</span></td>
