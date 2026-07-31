@@ -13,6 +13,7 @@ from app.database.migrations import init_db
 logger = logging.getLogger(__name__)
 
 worker_instance: Any = None
+reconciler_instance: Any = None
 
 
 async def periodic_cleanup_task() -> None:
@@ -55,6 +56,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.queue.worker import QueueWorker
     worker_instance = QueueWorker(session_maker)
     worker_task = asyncio.create_task(worker_instance.run())
+
+    # Start reconciler task
+    from app.queue.reconciler import GatewayReconciler
+    global reconciler_instance
+    reconciler_instance = GatewayReconciler(session_maker)
+    reconciler_task = asyncio.create_task(reconciler_instance.run())
+
     cleanup_task = asyncio.create_task(periodic_cleanup_task())
 
     try:
@@ -62,10 +70,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     finally:
         if worker_instance:
             worker_instance.stop()
+        if reconciler_instance:
+            reconciler_instance.stop()
+
         worker_task.cancel()
+        reconciler_task.cancel()
         cleanup_task.cancel()
         try:
-            await asyncio.gather(worker_task, cleanup_task, return_exceptions=True)
+            await asyncio.gather(worker_task, reconciler_task, cleanup_task, return_exceptions=True)
         except Exception:
             pass
         await engine.dispose()

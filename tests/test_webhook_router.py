@@ -43,7 +43,7 @@ async def test_webhook_ignore_non_message_inbound(client: AsyncClient) -> None:
     headers = _make_signed_headers(body, event_type="message.status")
     resp = await client.post("/webhooks/farros-wa", content=body, headers=headers)
     assert resp.status_code == 200
-    assert resp.json().get("message") == "Ignored non-message.inbound event"
+    assert resp.json().get("message") == "Ignored unsupported event type: message.status"
 
 
 @pytest.mark.asyncio

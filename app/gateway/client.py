@@ -29,15 +29,15 @@ class FarrosWAGatewayClient:
         timeout_sec = float(getattr(self.settings, "FARROS_WA_TIMEOUT", 30))
         self.timeout = httpx.Timeout(timeout_sec, connect=min(10.0, timeout_sec))
 
-    def _get_headers(self, idempotency_key: str | None = None) -> dict[str, str]:
-        if not idempotency_key or not IDEMPOTENCY_KEY_REGEX.match(idempotency_key):
-            raise GatewayError("Valid Idempotency-Key matching ^[A-Za-z0-9._:-]{8,128}$ is required for all outbound requests")
-
+    def _get_headers(self, idempotency_key: str | None = None, method: str = "POST") -> dict[str, str]:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Accept": "application/json",
-            "Idempotency-Key": str(idempotency_key),
         }
+        if method.upper() == "POST":
+            if not idempotency_key or not IDEMPOTENCY_KEY_REGEX.match(idempotency_key):
+                raise GatewayError("Valid Idempotency-Key matching ^[A-Za-z0-9._:-]{8,128}$ is required for all POST requests")
+            headers["Idempotency-Key"] = str(idempotency_key)
         return headers
 
     async def _execute_request(
@@ -51,7 +51,7 @@ class FarrosWAGatewayClient:
         max_retries: int = 3,
     ) -> GatewayMessageResponse:
         url = f"{self.base_url}{endpoint}"
-        headers = self._get_headers(idempotency_key)
+        headers = self._get_headers(idempotency_key, method=method)
 
         attempt = 0
         while attempt < max_retries:
@@ -101,14 +101,36 @@ class FarrosWAGatewayClient:
                         if isinstance(res_json, dict):
                             data_dict = res_json.get("data")
                             msg_id = None
+                            q_status = None
+                            d_status = None
+
                             if isinstance(data_dict, dict):
                                 msg_id = data_dict.get("id") or data_dict.get("message_id")
+                                q_status = data_dict.get("status") or data_dict.get("queue_status")
+                                d_status = data_dict.get("delivery_status")
+
                             if not msg_id:
                                 msg_id = res_json.get("id") or res_json.get("message_id")
-                            return GatewayMessageResponse(status="ok", message_id=str(msg_id) if msg_id else None, data=res_json)
-                        return GatewayMessageResponse(status="ok")
+                            if not q_status:
+                                q_status = res_json.get("status") or res_json.get("queue_status")
+                            if not d_status:
+                                d_status = res_json.get("delivery_status")
+
+                            # Interpret HTTP 202 without a specific queue_status as 'queued'
+                            if response.status_code == 202 and not q_status:
+                                q_status = "queued"
+
+                            return GatewayMessageResponse(
+                                status="ok",
+                                message_id=str(msg_id) if msg_id else None,
+                                queue_status=str(q_status) if q_status else None,
+                                delivery_status=str(d_status) if d_status else None,
+                                http_status=response.status_code,
+                                data=res_json
+                            )
+                        return GatewayMessageResponse(status="ok", http_status=response.status_code)
                     except Exception:
-                        return GatewayMessageResponse(status="ok")
+                        return GatewayMessageResponse(status="ok", http_status=response.status_code)
 
             except GatewayResponseError:
                 raise
@@ -182,4 +204,11 @@ class FarrosWAGatewayClient:
             idempotency_key=idempotency_key,
             data=data,
             file_info=(path, mime_type),
+        )
+
+    async def get_message(self, message_id: str) -> GatewayMessageResponse:
+        """Fetch message details from gateway."""
+        return await self._execute_request(
+            method="GET",
+            endpoint=f"/api/v1/messages/{message_id}",
         )

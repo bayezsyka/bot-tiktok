@@ -79,7 +79,7 @@ async def test_queue_worker_single_job_lifecycle(test_db: AsyncSession) -> None:
             job_repo = JobRepository(session)
             finished_job = await job_repo.get_by_id(job_id)
             assert finished_job is not None
-            assert finished_job.status == "completed"
+            assert finished_job.status == "gateway_queued"
             assert finished_job.sent_count == finished_job.media_count
     finally:
         if os.path.exists(dummy_file.name):

@@ -12,9 +12,11 @@ from app.config import get_settings
 from app.database.connection import get_db
 from app.database.models import Admin
 from app.dependencies import get_csrf_token, get_current_admin, require_csrf
+from app.utils.timezone import format_local_datetime
 
 router = APIRouter(dependencies=[Depends(get_current_admin)])
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+templates.env.filters["local_datetime"] = format_local_datetime
 
 
 @router.get("", response_class=HTMLResponse)
@@ -39,6 +41,7 @@ async def dashboard_page(
             "recent_jobs": data["recent_jobs"],
             "temp_disk_used_bytes": data["temp_disk_used_bytes"],
             "disk_free_bytes": data["disk_free_bytes"],
+            "gateway_session_status": data["gateway_session_status"],
         },
     )
 

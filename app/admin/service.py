@@ -36,6 +36,17 @@ class AdminService:
         except Exception:
             pass
 
+        # Fetch Gateway Session Status
+        session_status = "unknown"
+        try:
+            from app.gateway.client import FarrosWAGatewayClient
+            gateway = FarrosWAGatewayClient()
+            resp = await gateway._execute_request("GET", "/api/v1/sessions/default")
+            if resp.status == "ok" and resp.data:
+                session_status = resp.data.get("data", {}).get("status", "unknown")
+        except Exception:
+            session_status = "error"
+
         return {
             "stats": stats,
             "active_numbers": active_numbers,
@@ -43,6 +54,7 @@ class AdminService:
             "recent_jobs": recent_jobs,
             "temp_disk_used_bytes": used_bytes,
             "disk_free_bytes": check_disk_space(),
+            "gateway_session_status": session_status,
         }
 
     async def add_allowed_number(

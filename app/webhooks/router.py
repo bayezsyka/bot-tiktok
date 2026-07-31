@@ -4,10 +4,12 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.connection import get_db
+from app.database.models import DownloadItem, utc_now
 from app.database.repositories import (
     AllowedNumberRepository,
     JobRepository,
@@ -15,6 +17,7 @@ from app.database.repositories import (
     WebhookEventRepository,
 )
 from app.gateway.client import FarrosWAGatewayClient
+from app.queue.service import QueueService
 from app.security.rate_limit import check_webhook_rate_limit
 from app.security.urls import (
     extract_supported_media_url,
@@ -43,6 +46,62 @@ async def _send_initial_reply_background(sender_number: str, inbound_id: str) ->
     except Exception as e:
         logger.error(f"Failed to send initial reply for inbound {inbound_id}: {e}")
 
+async def _handle_outbound_status_event(db: AsyncSession, event_type: str, payload: dict) -> None:
+    data = payload.get("data", {})
+    msg_id = data.get("id") or data.get("message_id")
+    if not msg_id:
+        return
+
+    # Find the DownloadItem associated with this message_id
+    stmt = select(DownloadItem).where(DownloadItem.gateway_message_id == msg_id)
+    result = await db.execute(stmt)
+    item = result.scalar_one_or_none()
+
+    if not item:
+        # Not a message we track
+        return
+
+    delivery_status = event_type.split(".")[1]
+    item.gateway_delivery_status = delivery_status
+    item.last_gateway_sync_at = utc_now()
+
+    if delivery_status == "sent" and not item.gateway_sent_at:
+        item.gateway_sent_at = utc_now()
+        if item.status not in ("completed", "failed"):
+            item.status = "sent"
+    elif delivery_status == "delivered" and not item.gateway_delivered_at:
+        item.gateway_delivered_at = utc_now()
+        item.status = "completed"
+    elif delivery_status in ("read", "played") and not item.gateway_read_at:
+        item.gateway_read_at = utc_now()
+        item.status = "completed"
+    elif delivery_status == "failed":
+        item.gateway_failed_at = utc_now()
+        item.gateway_error_message = data.get("error_message") or data.get("error")
+        if item.status != "completed":
+            item.status = "failed"
+
+    await db.flush()
+
+    # Sync job status
+    queue_service = QueueService(db)
+    job_stmt = select(DownloadItem).where(DownloadItem.job_id == item.job_id)
+    res = await db.execute(job_stmt)
+    items = res.scalars().all()
+
+    total = len(items)
+    completed_count = sum(1 for i in items if i.status == "completed")
+    failed_count = sum(1 for i in items if i.status == "failed")
+    sent_count = sum(1 for i in items if i.status == "sent")
+
+    if completed_count == total:
+        await queue_service.update_job_status(item.job_id, "completed")
+    elif failed_count == total:
+        await queue_service.update_job_status(item.job_id, "failed", error_code="DELIVERY_FAILED", error_message="Semua item gagal terkirim oleh gateway.")
+    elif completed_count + failed_count == total:
+        await queue_service.update_job_status(item.job_id, "completed")
+    elif sent_count > 0 or completed_count > 0:
+        await queue_service.update_job_status(item.job_id, "sent")
 
 @router.post("/farros-wa", response_model=WebhookEventResponse)
 async def handle_farros_wa_webhook(
@@ -55,9 +114,10 @@ async def handle_farros_wa_webhook(
     # 1. Verify headers & signature (raises 401 if invalid)
     event_type, event_id, timestamp = validate_webhook_headers_and_signature(headers, raw_body)
 
-    # 2. Only process message.inbound event
-    if event_type != "message.inbound":
-        return WebhookEventResponse(status="ok", message="Ignored non-message.inbound event")
+    # 2. Process message.inbound and outbound status events
+    supported_events = ["message.inbound", "message.sent", "message.delivered", "message.read", "message.played", "message.failed"]
+    if event_type not in supported_events:
+        return WebhookEventResponse(status="ok", message=f"Ignored unsupported event type: {event_type}")
 
     # 3. Check idempotency X-FWAG-Event-Id
     payload_hash = hashlib.sha256(raw_body).hexdigest()
@@ -76,6 +136,21 @@ async def handle_farros_wa_webhook(
         payload_dict = json.loads(raw_body.decode("utf-8"))
     except Exception:
         return WebhookEventResponse(status="ok", message="Invalid JSON payload")
+
+    # If it's an outbound status event, handle it here and return
+    if event_type in ["message.sent", "message.delivered", "message.read", "message.played", "message.failed"]:
+        try:
+            await event_repo.create_event(event_id=event_id, event_type=event_type, payload_hash=payload_hash)
+            await _handle_outbound_status_event(db, event_type, payload_dict)
+            await db.commit()
+            return WebhookEventResponse(status="ok", message="Status updated successfully")
+        except IntegrityError:
+            await db.rollback()
+            return WebhookEventResponse(status="ok", message="Concurrent duplicate event ignored")
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Error handling outbound status event: {e}")
+            raise HTTPException(status_code=500, detail="Internal Server Error") from e
 
     parsed = parse_inbound_message(payload_dict)
     if not parsed:

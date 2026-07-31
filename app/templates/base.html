@@ -9,51 +9,47 @@
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
-    {% if admin %}
-    <header class="navbar">
-        <div class="nav-container">
-            <div class="nav-brand">
-                <span class="brand-badge">PROD</span>
-                <a href="/admin">Farros Media Bot</a>
+    <div class="layout-container">
+        {% if admin %}
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-title">Farros Media Bot</div>
+                <div class="text-sm text-muted mt-4">PROD ENVIRONMENT</div>
             </div>
-            <button class="nav-toggle" aria-label="Toggle Navigation">☰</button>
-            <nav class="nav-links">
-                <a href="/admin" class="nav-item {% if request.url.path == '/admin' or request.url.path == '/admin/' %}active{% endif %}">Dashboard</a>
-                <a href="/admin/allowed-numbers" class="nav-item {% if '/allowed-numbers' in request.url.path or '/numbers' in request.url.path %}active{% endif %}">Nomor Diizinkan</a>
-                <a href="/admin/unmapped-lids" class="nav-item {% if '/unmapped-lids' in request.url.path %}active{% endif %}">LID Belum Dipetakan</a>
-                <a href="/admin/history" class="nav-item {% if '/history' in request.url.path %}active{% endif %}">Riwayat Job</a>
-                <a href="/admin/settings" class="nav-item {% if '/settings' in request.url.path %}active{% endif %}">Pengaturan</a>
-                <div class="mobile-user-section">
-                    <span class="username">👤 {{ admin.username }}</span>
-                    <form action="/admin/logout" method="post" class="inline-form">
-                        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                        <button type="submit" class="btn-logout" style="width: 100%;">Logout</button>
-                    </form>
-                </div>
-            </nav>
-            <div class="nav-user">
-                <span class="username">👤 {{ admin.username }}</span>
-                <form action="/admin/logout" method="post" class="inline-form">
+            <ul class="nav-list">
+                <li class="nav-item">
+                    <a href="/admin" class="nav-link {% if request.url.path == '/admin' or request.url.path == '/admin/' %}active{% endif %}">Dashboard</a>
+                </li>
+                <li class="nav-item">
+                    <a href="/admin/allowed-numbers" class="nav-link {% if '/allowed-numbers' in request.url.path or '/numbers' in request.url.path %}active{% endif %}">Nomor Diizinkan</a>
+                </li>
+                <li class="nav-item">
+                    <a href="/admin/unmapped-lids" class="nav-link {% if '/unmapped-lids' in request.url.path %}active{% endif %}">LID Belum Dipetakan</a>
+                </li>
+                <li class="nav-item">
+                    <a href="/admin/history" class="nav-link {% if '/history' in request.url.path %}active{% endif %}">Riwayat Job</a>
+                </li>
+                <li class="nav-item">
+                    <a href="/admin/settings" class="nav-link {% if '/settings' in request.url.path %}active{% endif %}">Pengaturan</a>
+                </li>
+            </ul>
+            <div style="padding: 1.5rem; border-top: 1px solid var(--border-color);">
+                <div class="text-sm mb-4">👤 {{ admin.username }}</div>
+                <form action="/admin/logout" method="post">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="btn-logout">Logout</button>
+                    <button type="submit" class="btn btn-secondary" style="width: 100%;">Logout</button>
                 </form>
             </div>
-        </div>
-    </header>
-    {% endif %}
+        </aside>
+        {% endif %}
 
-    <main class="main-content">
-        {% block content %}{% endblock %}
-    </main>
-
-    <footer class="footer">
-        <div class="footer-container">
-            <p>&copy; 2026 Farros Media Bot. Multi-Platform WhatsApp Downloader Gateway.</p>
-        </div>
-    </footer>
+        <main class="main-content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
 
     <script src="/static/main.js"></script>
 </body>

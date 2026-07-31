@@ -3,110 +3,101 @@
 {% block title %}Nomor Diizinkan - Farros Media Bot{% endblock %}
 
 {% block content %}
-<div class="dashboard-header">
-    <h1>Manajemen Nomor WhatsApp Diizinkan</h1>
-    <p class="subtitle">Kelola daftar nomor WhatsApp dan pemetaan LID (Linked Identifier) untuk akses bot</p>
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Manajemen Nomor WhatsApp Diizinkan</h1>
+        <p class="text-muted mt-4">Kelola daftar nomor WhatsApp dan pemetaan LID (Linked Identifier) untuk akses bot</p>
+    </div>
 </div>
 
 {% if error %}
-<div class="alert alert-error"><span>⚠️ {{ error }}</span></div>
+<div style="background-color: rgba(239, 68, 68, 0.1); color: var(--status-danger); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; border: 1px solid rgba(239, 68, 68, 0.2);">
+    ⚠️ {{ error }}
+</div>
 {% endif %}
 {% if success %}
-<div class="alert alert-success"><span>✅ {{ success }}</span></div>
+<div style="background-color: rgba(16, 185, 129, 0.1); color: var(--status-success); padding: 1rem; border-radius: var(--radius-md); margin-bottom: 1.5rem; border: 1px solid rgba(16, 185, 129, 0.2);">
+    ✅ {{ success }}
+</div>
 {% endif %}
 
-<!-- Summary Stat Cards -->
 <div class="stats-grid">
-    <div class="stat-card">
-        <div class="stat-icon icon-active">📱</div>
-        <div class="stat-info">
-            <span class="stat-label">Total Nomor</span>
-            <span class="stat-value">{{ total_count }}</span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">Total Nomor</div>
+        <div class="stat-value">{{ total_count }}</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon icon-success">✅</div>
-        <div class="stat-info">
-            <span class="stat-label">Nomor Aktif</span>
-            <span class="stat-value">{{ numbers|selectattr("is_active")|list|length }}</span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">Nomor Aktif</div>
+        <div class="stat-value text-success">{{ numbers|selectattr("is_active")|list|length }}</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon icon-danger">🛑</div>
-        <div class="stat-info">
-            <span class="stat-label">Nonaktif</span>
-            <span class="stat-value">{{ numbers|rejectattr("is_active")|list|length }}</span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">Nonaktif</div>
+        <div class="stat-value text-danger">{{ numbers|rejectattr("is_active")|list|length }}</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon icon-queue">🔗</div>
-        <div class="stat-info">
-            <span class="stat-label">Memiliki LID</span>
-            <span class="stat-value">{{ numbers|selectattr("lid_number")|list|length }}</span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">Memiliki LID</div>
+        <div class="stat-value">{{ numbers|selectattr("lid_number")|list|length }}</div>
     </div>
 </div>
 
-<!-- Search & Import Actions Bar -->
-<div class="card filter-bar">
-    <div class="flex-header">
-        <form action="/admin/allowed-numbers" method="get" class="filter-form" style="flex: 1;">
-            <div class="filter-group" style="flex: 2;">
-                <input type="text" name="search" value="{{ search }}" placeholder="Cari nama, nomor WhatsApp (628...), atau LID...">
-            </div>
-            <div class="filter-actions">
-                <button type="submit" class="btn btn-primary">🔍 Cari</button>
-                {% if search %}
-                <a href="/admin/allowed-numbers" class="btn btn-secondary">Reset</a>
-                {% endif %}
-            </div>
+<div class="card" style="margin-bottom: 2rem;">
+    <div class="flex justify-between items-center" style="gap: 1rem; flex-wrap: wrap;">
+        <form action="/admin/allowed-numbers" method="get" class="search-form" style="flex: 1; min-width: 300px;">
+            <input type="text" name="search" class="form-control" value="{{ search }}" placeholder="Cari nama, nomor WhatsApp (628...), atau LID...">
+            <button type="submit" class="btn btn-primary">Cari</button>
+            {% if search %}
+            <a href="/admin/allowed-numbers" class="btn btn-secondary">Reset</a>
+            {% endif %}
         </form>
         {% if env_preview %}
-        <form action="/admin/allowed-numbers/import-env" method="post" class="inline-form" onsubmit="return confirm('Impor seluruh mapping LID valid dari environment (FARROS_WA_LID_MAP)?');">
+        <form action="/admin/allowed-numbers/import-env" method="post" onsubmit="return confirm('Impor seluruh mapping LID valid dari environment (FARROS_WA_LID_MAP)?');">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="btn btn-warning">📥 Impor Mapping dari Environment ({{ env_preview|length }})</button>
+            <button type="submit" class="btn btn-warning">📥 Impor Mapping ({{ env_preview|length }})</button>
         </form>
         {% endif %}
     </div>
 </div>
 
-<div class="grid-layout">
+<div style="display: grid; grid-template-columns: 350px 1fr; gap: 1.5rem;">
     <!-- Form Tambah Nomor Card -->
     <div class="card">
-        <div class="card-header">
-            <h2>+ Tambah Nomor Baru</h2>
-        </div>
-        <form action="/admin/allowed-numbers" method="post" class="standard-form">
+        <h2 style="margin-bottom: 1.5rem;">Tambah Nomor Baru</h2>
+        
+        <form action="/admin/allowed-numbers" method="post">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            
             <div class="form-group">
-                <label for="name">Nama Pengguna / Divisi <span class="required">*</span></label>
-                <input type="text" id="name" name="name" required placeholder="Contoh: Farros Sangkolo">
+                <label for="name" class="form-label">Nama Pengguna / Divisi <span class="text-danger">*</span></label>
+                <input type="text" id="name" name="name" class="form-control" required placeholder="Contoh: Farros Sangkolo">
             </div>
+            
             <div class="form-group">
-                <label for="phone_number">Nomor WhatsApp <span class="required">*</span></label>
-                <input type="text" id="phone_number" name="phone_number" required placeholder="Contoh: 6281234567890">
-                <span class="form-text">Format 628... (10-15 digit).</span>
+                <label for="phone_number" class="form-label">Nomor WhatsApp <span class="text-danger">*</span></label>
+                <input type="text" id="phone_number" name="phone_number" class="form-control" required placeholder="Contoh: 6281234567890">
+                <div class="text-sm text-muted" style="margin-top: 0.25rem;">Format 628... (10-15 digit).</div>
             </div>
+            
             <div class="form-group">
-                <label for="lid_number">LID WhatsApp (Opsional)</label>
-                <input type="text" id="lid_number" name="lid_number" placeholder="Contoh: 12345678901234">
-                <span class="form-text">Masukkan angka digit LID tanpa akhiran @lid.</span>
+                <label for="lid_number" class="form-label">LID WhatsApp (Opsional)</label>
+                <input type="text" id="lid_number" name="lid_number" class="form-control" placeholder="Contoh: 12345678901234">
+                <div class="text-sm text-muted" style="margin-top: 0.25rem;">Angka digit LID tanpa @lid.</div>
             </div>
+            
             <div class="form-group">
-                <label for="notes">Catatan (Opsional)</label>
-                <textarea id="notes" name="notes" rows="3" placeholder="Keterangan tambahan atau catatan pemilik"></textarea>
+                <label for="notes" class="form-label">Catatan (Opsional)</label>
+                <textarea id="notes" name="notes" rows="3" class="form-control" placeholder="Keterangan tambahan"></textarea>
             </div>
-            <button type="submit" class="btn btn-primary btn-block">+ Simpan Nomor Whitelist</button>
+            
+            <button type="submit" class="btn btn-primary" style="width: 100%;">+ Simpan</button>
         </form>
     </div>
 
     <!-- Tabel Nomor Whitelist Card -->
     <div class="card">
-        <div class="card-header">
-            <h2>Daftar Nomor Terdaftar (Total: {{ total_count }})</h2>
-        </div>
-        <div class="table-responsive">
-            <table class="data-table">
+        <h2 style="margin-bottom: 1.5rem;">Daftar Nomor Terdaftar <span class="badge badge-neutral">{{ total_count }}</span></h2>
+        
+        <div class="table-container">
+            <table>
                 <thead>
                     <tr>
                         <th>Nama</th>
@@ -124,17 +115,17 @@
                         <td>
                             <strong>{{ num.name }}</strong>
                             {% if num.notes %}
-                            <br><small class="text-muted">{{ num.notes }}</small>
+                            <div class="text-muted text-sm mt-4">{{ num.notes }}</div>
                             {% endif %}
                         </td>
-                        <td><span class="badge badge-phone">{{ num.phone_number }}</span></td>
+                        <td><span class="badge badge-neutral">{{ num.phone_number }}</span></td>
                         <td>
                             {% if num.lid_number %}
-                            <div style="display: flex; align-items: center; gap: 0.35rem;">
-                                <span class="badge badge-lid">{{ num.lid_number }}</span>
-                                <form action="/admin/allowed-numbers/{{ num.id }}/remove-lid" method="post" class="inline-form" onsubmit="return confirm('Hapus mapping LID dari nomor ini?');">
+                            <div class="flex items-center gap-2">
+                                <span class="badge badge-info">{{ num.lid_number }}</span>
+                                <form action="/admin/allowed-numbers/{{ num.id }}/remove-lid" method="post" onsubmit="return confirm('Hapus mapping LID dari nomor ini?');">
                                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                                    <button type="submit" class="btn btn-xs btn-danger" title="Hapus LID">✕</button>
+                                    <button type="submit" class="btn btn-danger btn-sm" title="Hapus LID">✕</button>
                                 </form>
                             </div>
                             {% else %}
@@ -142,25 +133,27 @@
                             {% endif %}
                         </td>
                         <td><strong>{{ num.total_jobs }}</strong></td>
-                        <td><small class="text-muted">{{ num.last_used_at.strftime('%Y-%m-%d %H:%M') if num.last_used_at else '-' }}</small></td>
+                        <td><span class="text-muted">{{ num.last_used_at | local_datetime if num.last_used_at else '-' }}</span></td>
                         <td>
-                            <form action="/admin/allowed-numbers/{{ num.id }}/toggle" method="post" class="inline-form">
+                            <form action="/admin/allowed-numbers/{{ num.id }}/toggle" method="post">
                                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                                <button type="submit" class="badge-button {% if num.is_active %}badge-active{% else %}badge-inactive{% endif %}">
-                                    {{ 'Aktif' if num.is_active else 'Nonaktif' }}
-                                </button>
+                                {% if num.is_active %}
+                                <button type="submit" class="badge badge-success" style="cursor: pointer; border: none; font-family: inherit;">Aktif</button>
+                                {% else %}
+                                <button type="submit" class="badge badge-danger" style="cursor: pointer; border: none; font-family: inherit;">Nonaktif</button>
+                                {% endif %}
                             </form>
                         </td>
                         <td>
-                            <form action="/admin/allowed-numbers/{{ num.id }}/delete" method="post" class="inline-form" onsubmit="return confirm('Apakah Anda yakin ingin menghapus nomor ini dari whitelist?');">
+                            <form action="/admin/allowed-numbers/{{ num.id }}/delete" method="post" onsubmit="return confirm('Apakah Anda yakin ingin menghapus nomor ini dari whitelist?');">
                                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                                <button type="submit" class="btn btn-danger btn-xs">Hapus</button>
+                                <button type="submit" class="btn btn-danger btn-sm">Hapus</button>
                             </form>
                         </td>
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="7" class="text-center empty-state">Belum ada nomor WhatsApp dalam whitelist.</td>
+                        <td colspan="7" style="text-align: center; padding: 3rem;" class="text-muted">Belum ada nomor WhatsApp dalam whitelist.</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -170,7 +163,7 @@
         {% if total_pages > 1 %}
         <div class="pagination">
             {% for p in range(1, total_pages + 1) %}
-            <a href="/admin/allowed-numbers?page={{ p }}&search={{ search }}" class="page-link {% if p == page %}btn-primary{% endif %}">{{ p }}</a>
+            <a href="/admin/allowed-numbers?page={{ p }}&search={{ search }}" class="page-link {% if p == page %}active{% endif %}">{{ p }}</a>
             {% endfor %}
         </div>
         {% endif %}

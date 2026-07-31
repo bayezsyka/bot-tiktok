@@ -85,7 +85,7 @@ async def test_all_admin_templates_rendering(test_db) -> None:
                 # 6. History Detail Page
                 resp_detail = await client.get(f"/admin/history/{job.id}")
                 assert resp_detail.status_code == 200
-                assert f"Detail Job #{job.id[:8]}" in resp_detail.text
+                assert f"Detail Pekerjaan #{job.id[:8]}" in resp_detail.text
 
                 # 7. Settings Page
                 resp_sett = await client.get("/admin/settings")

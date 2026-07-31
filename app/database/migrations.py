@@ -35,11 +35,36 @@ async def init_db(engine: AsyncEngine) -> None:
             )
             await conn.execute(text("UPDATE download_jobs SET platform = 'tiktok' WHERE platform IS NULL OR platform = '';"))
 
+        # Migration 3: Add gateway fields to download_jobs and download_items
+        result = await conn.execute(text("PRAGMA table_info(download_items);"))
+        item_columns = [row[1] for row in result.fetchall()]
+        if "gateway_queue_status" not in item_columns:
+            logger.info("Migrating schema: Adding gateway status fields to download_items")
+            await conn.execute(text("ALTER TABLE download_items ADD COLUMN gateway_queue_status VARCHAR(30);"))
+            await conn.execute(text("ALTER TABLE download_items ADD COLUMN gateway_delivery_status VARCHAR(30);"))
+            await conn.execute(text("ALTER TABLE download_items ADD COLUMN gateway_error_code VARCHAR(50);"))
+            await conn.execute(text("ALTER TABLE download_items ADD COLUMN gateway_error_message TEXT;"))
+            await conn.execute(text("ALTER TABLE download_items ADD COLUMN gateway_accepted_at DATETIME;"))
+            await conn.execute(text("ALTER TABLE download_items ADD COLUMN gateway_sent_at DATETIME;"))
+            await conn.execute(text("ALTER TABLE download_items ADD COLUMN gateway_delivered_at DATETIME;"))
+            await conn.execute(text("ALTER TABLE download_items ADD COLUMN gateway_read_at DATETIME;"))
+            await conn.execute(text("ALTER TABLE download_items ADD COLUMN gateway_failed_at DATETIME;"))
+            await conn.execute(text("ALTER TABLE download_items ADD COLUMN last_gateway_sync_at DATETIME;"))
+
+        result = await conn.execute(text("PRAGMA table_info(download_jobs);"))
+        job_columns = [row[1] for row in result.fetchall()]
+        if "gateway_status_summary" not in job_columns:
+            logger.info("Migrating schema: Adding gateway status fields to download_jobs")
+            await conn.execute(text("ALTER TABLE download_jobs ADD COLUMN gateway_status_summary VARCHAR(50);"))
+            await conn.execute(text("ALTER TABLE download_jobs ADD COLUMN last_gateway_sync_at DATETIME;"))
+            await conn.execute(text("ALTER TABLE download_jobs ADD COLUMN failure_notification_sent_at DATETIME;"))
+
         # Track migration versions in schema_migrations table
         migrations = [
             "001_add_lid_to_allowed_numbers",
             "002_create_unmapped_lids_table",
             "003_add_platform_to_download_jobs",
+            "004_add_gateway_delivery_fields",
         ]
         for version in migrations:
             await conn.execute(

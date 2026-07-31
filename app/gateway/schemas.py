@@ -13,4 +13,7 @@ class SendMessageRequest(BaseModel):
 class GatewayMessageResponse(BaseModel):
     status: str = "ok"
     message_id: str | None = None
+    queue_status: str | None = None
+    delivery_status: str | None = None
+    http_status: int | None = None
     data: dict | None = None

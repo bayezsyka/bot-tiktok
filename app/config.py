@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     APP_PORT: int = 3200
     APP_SECRET: str = "change-me"
     APP_BASE_URL: str = "http://localhost:3200"
+    APP_TIMEZONE: str = "Asia/Jakarta"
 
     DATABASE_PATH: str = "./storage/database/app.sqlite"
     TEMP_DIR: str = "./storage/tmp"

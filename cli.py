@@ -229,6 +229,43 @@ async def retry_job_cmd(args: argparse.Namespace) -> None:
         print(f"✅ Job '{args.id}' requeued successfully.")
 
 
+async def reconcile_gateway_cmd(args: argparse.Namespace) -> None:
+    from datetime import timedelta
+
+    from app.database.models import DownloadItem, utc_now
+    from app.queue.reconciler import GatewayReconciler
+    from sqlalchemy import select
+
+    print(f"Reconciling gateway statuses for jobs within the last {args.days} days...")
+
+    async with AsyncSessionLocal() as session:
+        cutoff = utc_now() - timedelta(days=args.days)
+        stmt = (
+            select(DownloadItem)
+            .where(
+                DownloadItem.gateway_message_id.isnot(None),
+                DownloadItem.created_at >= cutoff,
+                DownloadItem.status.in_(["gateway_queued", "gateway_processing", "sent"]),
+                DownloadItem.gateway_delivery_status.notin_(["read", "played", "delivered", "failed", "delivery_unknown"])
+            )
+        )
+        res = await session.execute(stmt)
+        items = res.scalars().all()
+
+        if not items:
+            print("No items to reconcile.")
+            return
+
+        print(f"Found {len(items)} items to reconcile. Syncing...")
+
+    from app.database.connection import get_session_maker
+    reconciler = GatewayReconciler(get_session_maker())
+    reconciler.batch_size = len(items)
+    await reconciler._reconcile_batch()
+
+    print("✅ Gateway reconciliation completed.")
+
+
 async def prune_temp_cmd(args: argparse.Namespace) -> None:
     settings = get_settings()
     ttl = args.ttl_minutes if args.ttl_minutes is not None else settings.TEMP_FILE_TTL_MINUTES
@@ -361,6 +398,10 @@ def main() -> None:
     # check-health
     subparsers.add_parser("check-health", help="Run comprehensive health checks")
 
+    # reconcile-gateway
+    p_recon = subparsers.add_parser("reconcile-gateway", help="Sync gateway status for recent incomplete jobs")
+    p_recon.add_argument("--days", type=int, default=7, help="Number of days to look back")
+
     args = parser.parse_args()
 
     commands = {
@@ -378,6 +419,7 @@ def main() -> None:
         "retry-job": retry_job_cmd,
         "prune-temp": prune_temp_cmd,
         "check-health": check_health_cmd,
+        "reconcile-gateway": reconcile_gateway_cmd,
     }
 
     if args.command in commands:

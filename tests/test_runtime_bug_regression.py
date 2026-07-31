@@ -210,9 +210,9 @@ async def test_worker_full_video_pipeline_calls_gateway(test_db: AsyncSession) -
             job_repo = JobRepository(session)
             finished_job = await job_repo.get_by_id(job_id)
             assert finished_job is not None
-            assert finished_job.status == "completed"
+            assert finished_job.status == "gateway_queued"
             assert len(finished_job.items) == 1
-            assert finished_job.items[0].status == "sent"
+            assert finished_job.items[0].status == "gateway_queued"
             assert finished_job.items[0].gateway_message_id == "wa-msg-reg-d"
     finally:
         if os.path.exists(dummy_file.name):
@@ -370,5 +370,5 @@ async def test_existing_sent_item_not_duplicated_or_resent(test_db: AsyncSession
         # Job should complete right away since all items are sent
         final_job = await job_repo.get_by_id(job_id)
         assert final_job is not None
-        assert final_job.status == "completed"
+        assert final_job.status == "gateway_queued"
         assert final_job.items[0].gateway_message_id == "old-gateway-msg-id-123"

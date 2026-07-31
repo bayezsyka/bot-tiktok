@@ -3,78 +3,64 @@
 {% block title %}Dashboard - Farros Media Bot{% endblock %}
 
 {% block content %}
-<div class="dashboard-header">
-    <h1>Ikhtisar Sistem Media Bot</h1>
-    <p class="subtitle">Real-time status pemrosesan media TikTok & Instagram Reels dan gateway WhatsApp</p>
+<div class="page-header">
+    <div>
+        <h1 class="page-title">Ikhtisar Sistem Media Bot</h1>
+        <p class="text-muted mt-4">Real-time status pemrosesan media TikTok & Instagram Reels dan gateway WhatsApp</p>
+    </div>
+    <div>
+        {% if gateway_session_status == 'connected' %}
+            <span class="badge badge-success">Gateway: Terhubung</span>
+        {% elif gateway_session_status == 'disconnected' %}
+            <span class="badge badge-danger">Gateway: Terputus</span>
+        {% else %}
+            <span class="badge badge-warning">Gateway: {{ gateway_session_status }}</span>
+        {% endif %}
+    </div>
 </div>
 
-<!-- 8 Stat Cards System -->
 <div class="stats-grid">
-    <div class="stat-card">
-        <div class="stat-icon icon-queue">📊</div>
-        <div class="stat-info">
-            <span class="stat-label">Total Job</span>
-            <span class="stat-value">{{ stats.total_jobs }}</span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">Total Pekerjaan</div>
+        <div class="stat-value">{{ stats.total_jobs }}</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon" style="background: rgba(0, 242, 254, 0.15); color: #00f2fe;">🎵</div>
-        <div class="stat-info">
-            <span class="stat-label">TikTok</span>
-            <span class="stat-value">{{ stats.tiktok_jobs }}</span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">TikTok</div>
+        <div class="stat-value">{{ stats.tiktok_jobs }}</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon" style="background: rgba(236, 72, 153, 0.15); color: #ec4899;">📷</div>
-        <div class="stat-info">
-            <span class="stat-label">Instagram</span>
-            <span class="stat-value">{{ stats.instagram_jobs }}</span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">Instagram</div>
+        <div class="stat-value">{{ stats.instagram_jobs }}</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon icon-success">✅</div>
-        <div class="stat-info">
-            <span class="stat-label">Sukses</span>
-            <span class="stat-value">{{ stats.completed_jobs }}</span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">Sukses</div>
+        <div class="stat-value text-success">{{ stats.completed_jobs }}</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon icon-danger">❌</div>
-        <div class="stat-info">
-            <span class="stat-label">Gagal</span>
-            <span class="stat-value">{{ stats.failed_jobs }}</span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">Gagal</div>
+        <div class="stat-value text-danger">{{ stats.failed_jobs }}</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon" style="background: rgba(245, 158, 11, 0.15); color: #fbbf24;">⚡</div>
-        <div class="stat-info">
-            <span class="stat-label">Sedang Diproses</span>
-            <span class="stat-value">{{ stats.active_jobs }}</span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">Sedang Diproses</div>
+        <div class="stat-value text-warning">{{ stats.active_jobs }}</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon icon-active">📱</div>
-        <div class="stat-info">
-            <span class="stat-label">Nomor Aktif</span>
-            <span class="stat-value">{{ active_numbers }}</span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">Nomor Aktif</div>
+        <div class="stat-value">{{ active_numbers }}</div>
     </div>
-    <div class="stat-card">
-        <div class="stat-icon" style="background: rgba(234, 179, 8, 0.15); color: #eab308;">⚠️</div>
-        <div class="stat-info">
-            <span class="stat-label">LID Belum Dipetakan</span>
-            <span class="stat-value"><a href="/admin/unmapped-lids">{{ unmapped_count }}</a></span>
-        </div>
+    <div class="card stat-card">
+        <div class="stat-label">LID Belum Dipetakan</div>
+        <div class="stat-value"><a href="/admin/unmapped-lids">{{ unmapped_count }}</a></div>
     </div>
 </div>
 
 <div class="card">
-    <div class="card-header">
+    <div class="page-header" style="margin-bottom: 1rem;">
         <h2>10 Aktivitas Terbaru</h2>
         <a href="/admin/history" class="btn btn-secondary btn-sm">Lihat Semua Riwayat</a>
     </div>
-    <div class="table-responsive">
-        <table class="data-table">
+    <div class="table-container">
+        <table>
             <thead>
                 <tr>
                     <th>Waktu Masuk</th>
@@ -89,27 +75,39 @@
             <tbody>
                 {% for job in recent_jobs %}
                 <tr>
-                    <td><small class="text-muted">{{ job.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</small></td>
+                    <td><span class="text-muted">{{ job.created_at | local_datetime }}</span></td>
                     <td>
                         {% if job.platform == 'instagram' %}
-                        <span class="badge" style="background: var(--instagram-gradient); color: #fff;">Instagram</span>
+                        <span class="badge badge-warning">Instagram</span>
                         {% else %}
-                        <span class="badge" style="background: #000; color: var(--tiktok-accent); border: 1px solid var(--tiktok-accent);">TikTok</span>
+                        <span class="badge badge-info">TikTok</span>
                         {% endif %}
                     </td>
-                    <td><span class="badge badge-phone">{{ job.sender_number }}</span></td>
-                    <td class="td-url"><a href="{{ job.original_url }}" target="_blank" rel="noopener noreferrer">{{ job.original_url[:45] }}{% if job.original_url|length > 45 %}...{% endif %}</a></td>
-                    <td><span class="badge badge-type">{{ job.content_type or '-' }}</span></td>
+                    <td><span class="badge badge-neutral">{{ job.sender_number }}</span></td>
                     <td>
-                        <span class="status-pill status-{{ job.status }}">{{ job.status }}</span>
+                        <a href="{{ job.original_url }}" target="_blank" rel="noopener noreferrer">
+                            {{ job.original_url[:30] }}{% if job.original_url|length > 30 %}...{% endif %}
+                        </a>
+                    </td>
+                    <td><span class="badge badge-neutral">{{ job.content_type or '-' }}</span></td>
+                    <td>
+                        {% if job.status == 'completed' %}
+                            <span class="badge badge-success">Sukses</span>
+                        {% elif job.status == 'failed' %}
+                            <span class="badge badge-danger">Gagal</span>
+                        {% elif job.status in ['queued', 'extracting', 'downloading', 'processing', 'gateway_queued', 'gateway_processing', 'sent'] %}
+                            <span class="badge badge-warning">Sedang Diproses ({{ job.status }})</span>
+                        {% else %}
+                            <span class="badge badge-neutral">{{ job.status }}</span>
+                        {% endif %}
                     </td>
                     <td>
-                        <a href="/admin/history/{{ job.id }}" class="btn btn-outline btn-xs">Detail</a>
+                        <a href="/admin/history/{{ job.id }}" class="btn btn-secondary btn-sm">Detail</a>
                     </td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="7" class="text-center empty-state">Belum ada aktivitas job yang tercatat.</td>
+                    <td colspan="7" style="text-align: center; padding: 3rem;" class="text-muted">Belum ada aktivitas pekerjaan yang tercatat.</td>
                 </tr>
                 {% endfor %}
             </tbody>

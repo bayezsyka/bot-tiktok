@@ -89,21 +89,26 @@ class QueueWorker:
                 return job.id
 
     async def _send_failure_notification(
-        self, sender_number: str, inbound_id: str, custom_message: str | None = None
+        self, job: DownloadJob, session: AsyncSession, custom_message: str | None = None
     ) -> None:
+        if job.failure_notification_sent_at:
+            return
+
         try:
             fail_msg = (
                 custom_message
                 or "konten tidak dapat diproses. pastikan link masih aktif, bersifat publik, dan dapat dibuka."
             )
             await self.gateway.send_text(
-                to=sender_number,
+                to=job.sender_number,
                 text=fail_msg,
-                external_reference=f"media-{inbound_id}-fail",
-                idempotency_key=f"media-{inbound_id}-failure",
+                external_reference=f"media-{job.inbound_message_id}-fail",
+                idempotency_key=f"media-{job.inbound_message_id}-failure",
             )
+            queue_service = QueueService(session)
+            await queue_service.mark_job_failure_notification_sent(job.id)
         except Exception as e:
-            logger.error(f"Could not send failure notification to {sender_number}: {e}")
+            logger.error(f"Could not send failure notification to {job.sender_number}: {e}")
 
     async def _process_job_safely(self, job_id: str) -> None:
         job_dir = None
@@ -128,8 +133,8 @@ class QueueWorker:
                     await queue_service.update_job_status(
                         job_id, "failed", error_code="UNSUPPORTED_CONTENT", error_message=e.user_friendly_message
                     )
+                    await self._send_failure_notification(job, session, e.user_friendly_message)
                     await session.commit()
-                    await self._send_failure_notification(job.sender_number, job.inbound_message_id, e.user_friendly_message)
                     return
                 except (DownloadTimeoutError, DownloadError, Exception) as e:
                     logger.error(f"[Stage: Extraction] Extraction error on job {job_id}: {e}")
@@ -153,8 +158,8 @@ class QueueWorker:
                     await queue_service.update_job_status(
                         job_id, "failed", error_code="SIZE_EXCEEDED", error_message=e.user_friendly_message
                     )
+                    await self._send_failure_notification(job, session, e.user_friendly_message)
                     await session.commit()
-                    await self._send_failure_notification(job.sender_number, job.inbound_message_id, e.user_friendly_message)
                     return
                 except Exception as e:
                     logger.error(f"[Stage: Download] Download error on job {job_id}: {e}")
@@ -174,8 +179,8 @@ class QueueWorker:
                     await queue_service.update_job_status(
                         job_id, "failed", error_code="INTERNAL_STATE_ERROR", error_message="Jumlah item unduhan tidak sesuai dengan metadata."
                     )
+                    await self._send_failure_notification(job, session)
                     await session.commit()
-                    await self._send_failure_notification(job.sender_number, job.inbound_message_id)
                     return
 
                 invalid_items = [
@@ -187,8 +192,8 @@ class QueueWorker:
                     await queue_service.update_job_status(
                         job_id, "failed", error_code="DOWNLOAD_FAILED", error_message="File media lokal tidak ditemukan atau rusak."
                     )
+                    await self._send_failure_notification(job, session)
                     await session.commit()
-                    await self._send_failure_notification(job.sender_number, job.inbound_message_id)
                     return
 
                 # STEP 3: Processing media
@@ -233,7 +238,7 @@ class QueueWorker:
             await queue_service.update_job_status(
                 job.id, "failed", error_code="NO_MEDIA_ITEMS", error_message="Tidak ada item media untuk dikirim."
             )
-            await self._send_failure_notification(job.sender_number, job.inbound_message_id)
+            await self._send_failure_notification(job, session)
             await session.commit()
             return
 
@@ -242,8 +247,8 @@ class QueueWorker:
         platform = getattr(job, "platform", "tiktok") or "tiktok"
 
         for item in items:
-            # Skip items already successfully sent
-            if item.status == "sent" or item.gateway_message_id:
+            # Skip items already successfully sent or queued to gateway
+            if item.status in ("sent", "gateway_queued") or item.gateway_message_id:
                 sent_count += 1
                 continue
 
@@ -260,11 +265,12 @@ class QueueWorker:
                 continue
 
             # Determine caption and idempotency key based on platform
+            # Note: Do not send captions for videos, just raw media
             if platform == "instagram":
-                caption = "video reels instagram berhasil diproses."
+                caption = ""
                 idemp_key = f"instagram-{job.inbound_message_id}-video"
             elif item.media_type == "video":
-                caption = "video tiktok berhasil diproses."
+                caption = ""
                 idemp_key = f"tiktok-{job.inbound_message_id}-video"
             else:
                 if item.position == 1:
@@ -282,8 +288,17 @@ class QueueWorker:
                     external_reference=job.id,
                     idempotency_key=idemp_key,
                 )
+
+                # Assume 202 means 'gateway_queued' unless gateway tells us otherwise
+                new_status = "gateway_queued"
+                q_status = response.queue_status or "queued"
+
                 await queue_service.update_item_status(
-                    item.id, status="sent", gateway_message_id=response.message_id
+                    item.id,
+                    status=new_status,
+                    gateway_message_id=response.message_id,
+                    gateway_queue_status=q_status,
+                    gateway_delivery_status=response.delivery_status
                 )
                 sent_count += 1
                 await session.commit()
@@ -307,18 +322,20 @@ class QueueWorker:
         job.failed_count = failed_count
 
         if sent_count == total_items and total_items > 0:
-            await queue_service.update_job_status(job.id, "completed")
+            await queue_service.update_job_status(job.id, "gateway_queued")
         elif sent_count > 0:
             await queue_service.update_job_status(
-                job.id, "completed" if failed_count == 0 else "failed",
+                job.id, "gateway_queued" if failed_count == 0 else "failed",
                 error_code="PARTIAL_FAILURE" if failed_count > 0 else None,
-                error_message=f"Terkirim {sent_count}/{total_items} item media." if failed_count > 0 else None,
+                error_message=f"Terkirim ke gateway {sent_count}/{total_items} item media." if failed_count > 0 else None,
             )
+            if failed_count > 0:
+                await self._send_failure_notification(job, session, "Gagal mengirim sebagian media.")
         else:
             await queue_service.update_job_status(
                 job.id, "failed", error_code="SEND_FAILED", error_message="Gagal mengirim semua item media ke gateway."
             )
-            await self._send_failure_notification(job.sender_number, job.inbound_message_id)
+            await self._send_failure_notification(job, session)
 
         await session.commit()
 
@@ -341,5 +358,5 @@ class QueueWorker:
             await queue_service.update_job_status(
                 job.id, "failed", error_code="MAX_RETRIES_EXCEEDED", error_message=error_msg[:300]
             )
-            await self._send_failure_notification(job.sender_number, job.inbound_message_id, user_friendly_message)
+            await self._send_failure_notification(job, session, user_friendly_message)
         await session.commit()
