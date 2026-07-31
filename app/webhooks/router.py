@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.connection import get_db
+from app.database.connection import get_db, get_session_maker
 from app.database.models import DownloadItem
 from app.database.repositories import (
     AllowedNumberRepository,
@@ -17,6 +17,11 @@ from app.database.repositories import (
     WebhookEventRepository,
 )
 from app.gateway.client import FarrosWAGatewayClient
+from app.gateway.delivery_service import (
+    GatewayDeliveryService,
+    StatusSyncResult,
+    dispatch_failure_notification,
+)
 from app.security.rate_limit import check_webhook_rate_limit
 from app.security.urls import (
     extract_supported_media_url,
@@ -45,11 +50,11 @@ async def _send_initial_reply_background(sender_number: str, inbound_id: str) ->
     except Exception as e:
         logger.error(f"Failed to send initial reply for inbound {inbound_id}: {e}")
 
-async def _handle_outbound_status_event(db: AsyncSession, event_type: str, payload: dict) -> None:
+async def _handle_outbound_status_event(db: AsyncSession, event_type: str, payload: dict) -> StatusSyncResult | None:
     data = payload.get("data", {})
     msg_id = data.get("id") or data.get("message_id")
     if not msg_id:
-        return
+        return None
 
     # Find the DownloadItem associated with this message_id
     stmt = select(DownloadItem).where(DownloadItem.gateway_message_id == msg_id)
@@ -58,7 +63,7 @@ async def _handle_outbound_status_event(db: AsyncSession, event_type: str, paylo
 
     if not item:
         # Not a message we track
-        return
+        return None
 
     q_status = None
     d_status = None
@@ -76,10 +81,9 @@ async def _handle_outbound_status_event(db: AsyncSession, event_type: str, paylo
     elif event_type == "message.failed":
         q_status = "failed"
 
-    from app.gateway.delivery_service import GatewayDeliveryService
     delivery_service = GatewayDeliveryService(db)
 
-    await delivery_service.process_outbound_status(
+    return await delivery_service.process_outbound_status(
         item=item,
         d_status=d_status,
         q_status=q_status,
@@ -125,8 +129,11 @@ async def handle_farros_wa_webhook(
     if event_type in ["message.sent", "message.delivered", "message.read", "message.played", "message.failed"]:
         try:
             await event_repo.create_event(event_id=event_id, event_type=event_type, payload_hash=payload_hash)
-            await _handle_outbound_status_event(db, event_type, payload_dict)
+            sync_result = await _handle_outbound_status_event(db, event_type, payload_dict)
             await db.commit()
+            await db.close()
+            if sync_result and sync_result.notification_required:
+                await dispatch_failure_notification(get_session_maker(), sync_result.job_id)
             return WebhookEventResponse(status="ok", message="Status updated successfully")
         except IntegrityError:
             await db.rollback()

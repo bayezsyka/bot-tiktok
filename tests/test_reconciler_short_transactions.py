@@ -163,6 +163,86 @@ async def test_send_result_pending_temporary_error_no_resend(test_db: AsyncSessi
 
 
 @pytest.mark.asyncio
+async def test_nested_gateway_processing_payload_sets_delivery_unknown_pending(test_db: AsyncSession):
+    session_maker = async_sessionmaker(bind=test_db.bind, class_=AsyncSession, expire_on_commit=False)
+    base = utc_now()
+
+    async with session_maker() as session:
+        job = DownloadJob(
+            id="job-nested-production", status="gateway_processing", sender_number="628000000313",
+            inbound_message_id="inb-nested-production", webhook_event_id="wh-nested-production",
+            original_url="http://example.com",
+        )
+        session.add(job)
+        item = DownloadItem(
+            job_id=job.id, position=1, media_type="video",
+            status="gateway_processing", gateway_message_id="msg-nested-production",
+            gateway_queue_status="processing",
+            gateway_accepted_at=base,
+        )
+        item.created_at = base
+        session.add(item)
+        await session.commit()
+        item_id = item.id
+
+    reconciler = GatewayReconciler(session_maker)
+    nested_response = GatewayMessageResponse(
+        status="ok",
+        message_id="msg-nested-production",
+        http_status=200,
+        data={
+            "success": True,
+            "data": {
+                "status": "processing",
+                "last_error_code": "SEND_RESULT_PENDING_TEMPORARY_ERROR",
+                "last_error_message": "Hasil pengiriman belum pasti.",
+                "whatsapp_message_id": "3EB...",
+            },
+        },
+    )
+
+    with patch.object(reconciler.gateway, "get_message", new_callable=AsyncMock, return_value=nested_response), \
+         patch.object(reconciler.gateway, "send_media", new_callable=AsyncMock) as mock_send_media, \
+         patch("app.queue.reconciler.dispatch_failure_notification", new_callable=AsyncMock) as mock_notify:
+        await reconciler._reconcile_batch()
+
+    mock_send_media.assert_not_called()
+    mock_notify.assert_not_called()
+    async with session_maker() as session:
+        nested_item = await session.get(DownloadItem, item_id)
+        assert nested_item is not None
+        nested_job = await session.get(DownloadJob, "job-nested-production")
+        assert nested_job is not None
+        assert nested_item.status == "delivery_unknown_pending"
+        assert nested_item.pending_since_at is not None
+        assert nested_item.gateway_error_code == "SEND_RESULT_PENDING_TEMPORARY_ERROR"
+        assert nested_item.gateway_error_message == "Hasil pengiriman belum pasti."
+        assert nested_job.status == "delivery_unknown_pending"
+
+    first_pending_since = nested_item.pending_since_at
+    first_sync = nested_item.last_gateway_sync_at
+    for minute in range(1, 4):
+        with patch("app.gateway.delivery_service.utc_now", return_value=base + timedelta(minutes=minute)):
+            await reconciler._apply_response_to_item(item_id, nested_response)
+
+    async with session_maker() as session:
+        repeated_item = await session.get(DownloadItem, item_id)
+        assert repeated_item is not None
+        assert repeated_item.pending_since_at == first_pending_since
+        assert repeated_item.last_gateway_sync_at != first_sync
+
+    with patch("app.queue.reconciler.utc_now", return_value=base + timedelta(minutes=31)), \
+         patch.object(reconciler.gateway, "get_message", new_callable=AsyncMock) as mock_get:
+        await reconciler._reconcile_batch()
+
+    mock_get.assert_not_called()
+    async with session_maker() as session:
+        final_item = await session.get(DownloadItem, item_id)
+        assert final_item is not None
+        assert final_item.status == "delivery_unknown"
+
+
+@pytest.mark.asyncio
 async def test_delivery_unknown_pending_promoted_after_timeout(test_db: AsyncSession):
     """After 30 min timeout, delivery_unknown_pending should become delivery_unknown."""
     session_maker = async_sessionmaker(bind=test_db.bind, class_=AsyncSession, expire_on_commit=False)
@@ -341,6 +421,51 @@ async def test_reconciler_poll_interval_increases_as_item_ages(test_db: AsyncSes
         item_for_update.last_gateway_sync_at = now - timedelta(minutes=16)
         await session.commit()
     assert await poll_count() == 1
+
+
+@pytest.mark.asyncio
+async def test_reconciler_scans_past_recent_not_due_items(test_db: AsyncSession):
+    session_maker = async_sessionmaker(bind=test_db.bind, class_=AsyncSession, expire_on_commit=False)
+
+    async with session_maker() as session:
+        now = utc_now()
+        job = DownloadJob(
+            id="job-starvation", status="gateway_queued", sender_number="628000000314",
+            inbound_message_id="inb-starvation", webhook_event_id="wh-starvation",
+            original_url="http://example.com",
+        )
+        session.add(job)
+        for i in range(20):
+            item = DownloadItem(
+                job_id=job.id, position=i + 1, media_type="video",
+                status="gateway_queued", gateway_message_id=f"msg-starvation-recent-{i}",
+                gateway_accepted_at=now - timedelta(minutes=70),
+                last_gateway_sync_at=now - timedelta(seconds=30),
+            )
+            item.created_at = now - timedelta(seconds=i)
+            session.add(item)
+
+        due_item = DownloadItem(
+            job_id=job.id, position=21, media_type="video",
+            status="gateway_queued", gateway_message_id="msg-starvation-due",
+            gateway_accepted_at=now - timedelta(minutes=70),
+            last_gateway_sync_at=now - timedelta(minutes=16),
+        )
+        due_item.created_at = now - timedelta(minutes=20)
+        session.add(due_item)
+        await session.commit()
+
+    reconciler = GatewayReconciler(session_maker)
+    with patch.object(reconciler.gateway, "get_message", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = GatewayMessageResponse(
+            status="ok",
+            http_status=200,
+            data={"status": "queued"},
+            queue_status="queued",
+        )
+        await reconciler._reconcile_batch()
+
+    mock_get.assert_called_once_with("msg-starvation-due")
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.config import get_settings
 from app.database.models import DownloadItem, utc_now
 from app.gateway.client import FarrosWAGatewayClient
-from app.gateway.delivery_service import GatewayDeliveryService
+from app.gateway.delivery_service import (
+    GatewayDeliveryService,
+    dispatch_failure_notification,
+    normalize_gateway_message_data,
+)
 from app.gateway.exceptions import GatewayRateLimitError
 from app.gateway.schemas import GatewayMessageResponse
 
@@ -152,7 +156,7 @@ class GatewayReconciler:
                         DownloadItem.created_at >= age_cutoff,
                     )
                     .order_by(DownloadItem.created_at.desc())
-                    .limit(batch_size * 3)  # fetch extra to filter by backoff
+                    .limit(max(batch_size * 20, 100))
                 )
 
                 result = await session.execute(stmt)
@@ -224,6 +228,8 @@ class GatewayReconciler:
 
     async def _apply_response_to_item(self, item_id: int, response: "GatewayMessageResponse") -> None:
         """Open a fresh session, load the item, apply the gateway response, commit."""
+        sync_job_id: str | None = None
+        notification_required = False
         try:
             async with self.session_maker() as session:
                 try:
@@ -237,27 +243,38 @@ class GatewayReconciler:
                     delivery_service = GatewayDeliveryService(session)
 
                     if response.http_status == 404 or response.status == "not_found":
-                        await delivery_service.process_outbound_status(
+                        sync_result = await delivery_service.process_outbound_status(
                             item=item,
                             d_status="delivery_unknown",
                             error_message="Message not found in Gateway (404)"
                         )
+                        sync_job_id = sync_result.job_id
+                        notification_required = sync_result.notification_required
                     elif response.status == "ok" and response.data:
+                        response_data = normalize_gateway_message_data(response.data)
                         q_status = response.queue_status
                         d_status = response.delivery_status
-                        error_code = response.data.get("error_code") or response.data.get("last_error_code")
+                        if not q_status:
+                            q_status = response_data.get("status") or response_data.get("queue_status")
+                        if not d_status:
+                            d_status = response_data.get("delivery_status")
+                        error_code = response_data.get("error_code") or response_data.get("last_error_code")
                         error_message = (
-                            response.data.get("error_message")
-                            or response.data.get("last_error_message")
-                            or response.data.get("error")
+                            response_data.get("error_message")
+                            or response_data.get("last_error_message")
+                            or response_data.get("error")
                         )
-                        await delivery_service.process_outbound_status(
+                        sync_result = await delivery_service.process_outbound_status(
                             item=item,
                             d_status=d_status,
                             q_status=q_status,
                             error_message=error_message,
-                            error_code=error_code
+                            error_code=error_code,
+                            send_dispatched_at=_parse_gateway_datetime(response_data.get("send_dispatched_at")),
+                            whatsapp_message_id=response_data.get("whatsapp_message_id"),
                         )
+                        sync_job_id = sync_result.job_id
+                        notification_required = sync_result.notification_required
 
                     await session.commit()
                 except Exception as e:
@@ -268,9 +285,15 @@ class GatewayReconciler:
                     logger.warning(f"Reconciler write error for item {item_id}: {e}")
         except Exception as e:
             logger.error(f"Reconciler session error for item {item_id}: {e}")
+            return
+
+        if sync_job_id and notification_required:
+            await dispatch_failure_notification(self.session_maker, sync_job_id)
 
     async def _promote_to_delivery_unknown(self, item_id: int) -> None:
         """Promote a delivery_unknown_pending item to delivery_unknown after timeout."""
+        sync_job_id: str | None = None
+        notification_required = False
         try:
             async with self.session_maker() as session:
                 try:
@@ -287,7 +310,9 @@ class GatewayReconciler:
                         await session.flush()
 
                         delivery_service = GatewayDeliveryService(session)
-                        await delivery_service.sync_job_status(item.job_id)
+                        sync_result = await delivery_service.sync_job_status(item.job_id)
+                        sync_job_id = sync_result.job_id
+                        notification_required = sync_result.notification_required
 
                     await session.commit()
                 except Exception as e:
@@ -298,6 +323,10 @@ class GatewayReconciler:
                     logger.warning(f"Reconciler promote error for item {item_id}: {e}")
         except Exception as e:
             logger.error(f"Reconciler session error promoting item {item_id}: {e}")
+            return
+
+        if sync_job_id and notification_required:
+            await dispatch_failure_notification(self.session_maker, sync_job_id)
 
     def _apply_cooldown(self, retry_after: float | None) -> None:
         """Set a global cooldown timestamp after receiving a 429."""
@@ -317,3 +346,15 @@ def _seconds_between(now: datetime, earlier: datetime) -> float:
     if earlier.tzinfo is None:
         return float((now.replace(tzinfo=None) - earlier).total_seconds())
     return float((now - earlier).total_seconds())
+
+
+def _parse_gateway_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None

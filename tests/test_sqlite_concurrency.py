@@ -448,3 +448,73 @@ async def test_worker_ffmpeg_wait_does_not_block_reconciler_write(real_sqlite):
         assert job.status == "gateway_queued"
         item = (await s.execute(select(DownloadItem).where(DownloadItem.job_id == worker_job.id))).scalar_one()
         assert item.final_size_bytes is not None and item.final_size_bytes > 0
+
+
+@pytest.mark.asyncio
+async def test_failure_notification_network_wait_does_not_hold_transaction(real_sqlite):
+    engine, sm = real_sqlite
+    tracker = TransactionTracker()
+    tracker.install(engine)
+
+    async with sm() as s:
+        failed_job = DownloadJob(
+            id="notify-failed-job", status="gateway_queued", sender_number="628000000024",
+            inbound_message_id="inb-notify-failed", webhook_event_id="wh-notify-failed",
+            original_url="http://example.com",
+        )
+        worker_job = DownloadJob(
+            id="notify-worker-job", status="queued", sender_number="628000000025",
+            inbound_message_id="inb-notify-worker", webhook_event_id="wh-notify-worker",
+            original_url="http://example.com",
+        )
+        s.add_all([failed_job, worker_job])
+        item = DownloadItem(
+            job_id=failed_job.id, position=1, media_type="video",
+            status="gateway_queued", gateway_message_id="msg-notify-failed",
+        )
+        s.add(item)
+        await s.commit()
+        item_id = item.id
+
+    reconciler = GatewayReconciler(sm)
+    worker = QueueWorker(sm)
+    send_started = asyncio.Event()
+    release_send = asyncio.Event()
+    send_count = 0
+
+    async def waiting_send_text(*args, **kwargs):
+        nonlocal send_count
+        send_count += 1
+        assert tracker.active == 0
+        send_started.set()
+        await release_send.wait()
+        return GatewayMessageResponse(status="ok", message_id="msg-failure-notification")
+
+    response = GatewayMessageResponse(
+        status="ok",
+        http_status=200,
+        data={"status": "failed", "error_message": "Gateway failed"},
+        queue_status="failed",
+    )
+
+    with patch("app.gateway.delivery_service.FarrosWAGatewayClient.send_text", side_effect=waiting_send_text):
+        reconcile_task = asyncio.create_task(reconciler._apply_response_to_item(item_id, response))
+        await asyncio.wait_for(send_started.wait(), timeout=2)
+        assert tracker.active == 0
+
+        await worker._update_job_status_safe("notify-worker-job", "processing")
+
+        async with sm() as s:
+            worker_row = await s.get(DownloadJob, "notify-worker-job")
+            assert worker_row is not None
+            assert worker_row.status == "processing"
+
+        release_send.set()
+        await reconcile_task
+
+    assert send_count == 1
+    async with sm() as s:
+        failed_row = await s.get(DownloadJob, "notify-failed-job")
+        assert failed_row is not None
+        assert failed_row.status == "failed"
+        assert failed_row.failure_notification_sent_at is not None

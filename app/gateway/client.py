@@ -126,7 +126,8 @@ class FarrosWAGatewayClient:
                                 queue_status=str(q_status) if q_status else None,
                                 delivery_status=str(d_status) if d_status else None,
                                 http_status=response.status_code,
-                                data=res_json
+                                data=data_dict,
+                                raw_response=res_json,
                             )
                         return GatewayMessageResponse(status="ok", http_status=response.status_code)
                     except Exception:

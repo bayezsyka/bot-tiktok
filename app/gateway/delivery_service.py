@@ -1,7 +1,9 @@
 import logging
+from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database.models import DownloadItem, DownloadJob, utc_now
 from app.gateway.client import FarrosWAGatewayClient
@@ -25,6 +27,20 @@ QUEUE_RANKS = {
 }
 
 
+@dataclass(frozen=True)
+class StatusSyncResult:
+    job_id: str
+    notification_required: bool = False
+
+
+@dataclass(frozen=True)
+class FailureNotificationSnapshot:
+    job_id: str
+    sender_number: str
+    inbound_message_id: str
+    message: str
+
+
 class GatewayDeliveryService:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -37,7 +53,9 @@ class GatewayDeliveryService:
         q_status: str | None = None,
         error_message: str | None = None,
         error_code: str | None = None,
-    ) -> None:
+        send_dispatched_at: datetime | None = None,
+        whatsapp_message_id: str | None = None,
+    ) -> StatusSyncResult:
         """
         Process outbound status idempotently and monotonically.
         """
@@ -55,7 +73,7 @@ class GatewayDeliveryService:
             # Do NOT mark as failed. Do NOT resend.
             if item.status not in ("completed", "failed", "cancelled"):
                 if item.pending_since_at is None:
-                    item.pending_since_at = item.gateway_accepted_at or utc_now()
+                    item.pending_since_at = send_dispatched_at or item.gateway_accepted_at or utc_now()
                 item.status = "delivery_unknown_pending"
                 item.gateway_queue_status = "processing"
                 item.gateway_error_code = error_code
@@ -64,8 +82,7 @@ class GatewayDeliveryService:
                     or "Gateway sudah meneruskan pesan, tetapi hasil final dari WhatsApp belum diterima."
                 )
             await self.db.flush()
-            await self.sync_job_status(item.job_id)
-            return
+            return await self.sync_job_status(item.job_id)
 
         # Handle Queue Status
         if q_status:
@@ -105,16 +122,18 @@ class GatewayDeliveryService:
                             if q_status == "sent":
                                 item.status = "sent"
                                 item.pending_since_at = None
-                                if not item.gateway_sent_at:
+                                if send_dispatched_at and not item.gateway_sent_at:
+                                    item.gateway_sent_at = send_dispatched_at
+                                elif not item.gateway_sent_at:
                                     item.gateway_sent_at = utc_now()
                             elif q_status == "processing":
                                 item.status = "gateway_processing"
                                 if not item.gateway_accepted_at:
-                                    item.gateway_accepted_at = utc_now()
+                                    item.gateway_accepted_at = send_dispatched_at or utc_now()
                             elif q_status in ("queued", "scheduled"):
                                 item.status = "gateway_queued"
                                 if not item.gateway_accepted_at:
-                                    item.gateway_accepted_at = utc_now()
+                                    item.gateway_accepted_at = send_dispatched_at or utc_now()
 
         # Handle Delivery Status
         if d_status:
@@ -154,9 +173,9 @@ class GatewayDeliveryService:
         await self.db.flush()
 
         # Sync overall job status
-        await self.sync_job_status(item.job_id)
+        return await self.sync_job_status(item.job_id)
 
-    async def sync_job_status(self, job_id: str) -> None:
+    async def sync_job_status(self, job_id: str) -> StatusSyncResult:
         """
         Aggregate item statuses to determine job status and handle failure notifications.
         """
@@ -165,7 +184,7 @@ class GatewayDeliveryService:
         items = res.scalars().all()
 
         if not items:
-            return
+            return StatusSyncResult(job_id=job_id, notification_required=False)
 
         total = len(items)
         completed_count = sum(1 for i in items if i.status == "completed")
@@ -182,7 +201,7 @@ class GatewayDeliveryService:
         job = job_res.scalar_one_or_none()
 
         if not job:
-            return
+            return StatusSyncResult(job_id=job_id, notification_required=False)
 
         new_job_status = job.status
         error_code = None
@@ -218,29 +237,77 @@ class GatewayDeliveryService:
                 error_code=error_code,
                 error_message=error_message,
             )
-            # Fetch updated job
-            job_res = await self.db.execute(job_stmt)
-            job = job_res.scalar_one_or_none()
-            if job and new_job_status == "failed":
-                await self.send_failure_notification(job)
-
-    async def send_failure_notification(self, job: DownloadJob, custom_message: str | None = None) -> None:
-        """
-        Send a failure notification once per job.
-        """
-        if job.failure_notification_sent_at:
-            return
-
-        gateway = FarrosWAGatewayClient()
-        try:
-            fail_msg = custom_message or "video gagal dikirim melalui whatsapp. silakan kirim ulang link beberapa saat lagi."
-            await gateway.send_text(
-                to=job.sender_number,
-                text=fail_msg,
-                external_reference=f"media-{job.inbound_message_id}-fail",
-                idempotency_key=f"media-{job.inbound_message_id}-failure",
+            return StatusSyncResult(
+                job_id=job_id,
+                notification_required=new_job_status == "failed" and not job.failure_notification_sent_at,
             )
-            await self.queue_service.mark_job_failure_notification_sent(job.id)
-            logger.info(f"Sent failure notification for job {job.id}")
-        except Exception as e:
-            logger.error(f"Could not send failure notification to {job.sender_number}: {e}")
+
+        return StatusSyncResult(job_id=job_id, notification_required=False)
+
+
+async def load_failure_notification_snapshot(
+    session_maker: async_sessionmaker[AsyncSession],
+    job_id: str,
+    custom_message: str | None = None,
+) -> FailureNotificationSnapshot | None:
+    async with session_maker() as session:
+        stmt = select(
+            DownloadJob.id,
+            DownloadJob.sender_number,
+            DownloadJob.inbound_message_id,
+            DownloadJob.failure_notification_sent_at,
+        ).where(DownloadJob.id == job_id)
+        result = await session.execute(stmt)
+        row = result.one_or_none()
+        if not row:
+            return None
+        loaded_job_id, sender_number, inbound_message_id, sent_at = row
+        if sent_at or not sender_number:
+            return None
+
+    message = custom_message or "video gagal dikirim melalui whatsapp. silakan kirim ulang link beberapa saat lagi."
+    return FailureNotificationSnapshot(
+        job_id=loaded_job_id,
+        sender_number=sender_number,
+        inbound_message_id=inbound_message_id,
+        message=message,
+    )
+
+
+async def dispatch_failure_notification(
+    session_maker: async_sessionmaker[AsyncSession],
+    job_id: str,
+    custom_message: str | None = None,
+    gateway: FarrosWAGatewayClient | None = None,
+) -> bool:
+    snapshot = await load_failure_notification_snapshot(session_maker, job_id, custom_message)
+    if not snapshot:
+        return False
+
+    client = gateway or FarrosWAGatewayClient()
+    try:
+        await client.send_text(
+            to=snapshot.sender_number,
+            text=snapshot.message,
+            external_reference=f"media-{snapshot.inbound_message_id}-fail",
+            idempotency_key=f"media-{snapshot.inbound_message_id}-failure",
+        )
+    except Exception as e:
+        logger.error(f"Could not send failure notification to {snapshot.sender_number}: {e}")
+        return False
+
+    async with session_maker() as session:
+        queue_service = QueueService(session)
+        await queue_service.mark_job_failure_notification_sent(snapshot.job_id)
+        await session.commit()
+    logger.info(f"Sent failure notification for job {snapshot.job_id}")
+    return True
+
+
+def normalize_gateway_message_data(payload: dict | None) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    nested = payload.get("data")
+    if isinstance(nested, dict):
+        return nested
+    return payload

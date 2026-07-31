@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from app.database.models import DownloadItem, DownloadJob
 from httpx import AsyncClient
@@ -50,9 +52,10 @@ async def test_webhook_idempotency(client: AsyncClient, test_db: AsyncSession):
     resp1 = await client.post("/webhooks/farros-wa", content=payload_bytes, headers=headers1)
     assert resp1.status_code == 200
 
-    await test_db.refresh(item)
-    assert item.gateway_delivery_status == "delivered"
-    assert item.status == "completed"
+    loaded_item = await test_db.get(DownloadItem, item.id)
+    assert loaded_item is not None
+    assert loaded_item.gateway_delivery_status == "delivered"
+    assert loaded_item.status == "completed"
 
     # Send the exact same webhook again (idempotency test)
     resp2 = await client.post("/webhooks/farros-wa", content=payload_bytes, headers=headers1)
@@ -81,10 +84,11 @@ async def test_webhook_idempotency(client: AsyncClient, test_db: AsyncSession):
     resp3 = await client.post("/webhooks/farros-wa", content=fail_payload_bytes, headers=headers2)
     assert resp3.status_code == 200
 
-    await test_db.refresh(item)
+    loaded_item = await test_db.get(DownloadItem, item.id)
+    assert loaded_item is not None
     # Status should still be 'completed' and 'delivered'
-    assert item.gateway_delivery_status == "delivered"
-    assert item.status == "completed"
+    assert loaded_item.gateway_delivery_status == "delivered"
+    assert loaded_item.status == "completed"
 
 
 @pytest.mark.asyncio
@@ -126,20 +130,78 @@ async def test_webhook_reads_last_error_message(client: AsyncClient, test_db: As
     message = timestamp.encode("utf-8") + b"." + payload_bytes
     signature = hmac.new(b"test-webhook-secret-123456", message, hashlib.sha256).hexdigest()
 
-    response = await client.post(
-        "/webhooks/farros-wa",
-        content=payload_bytes,
-        headers={
-            "X-FWAG-Event": "message.failed",
-            "X-FWAG-Event-Id": "wh-evt-last-error",
-            "X-FWAG-Timestamp": timestamp,
-            "X-FWAG-Signature": signature,
-            "Content-Type": "application/json",
-        },
-    )
+    with patch("app.gateway.delivery_service.FarrosWAGatewayClient.send_text", new_callable=AsyncMock):
+        response = await client.post(
+            "/webhooks/farros-wa",
+            content=payload_bytes,
+            headers={
+                "X-FWAG-Event": "message.failed",
+                "X-FWAG-Event-Id": "wh-evt-last-error",
+                "X-FWAG-Timestamp": timestamp,
+                "X-FWAG-Signature": signature,
+                "Content-Type": "application/json",
+            },
+        )
 
     assert response.status_code == 200
-    await test_db.refresh(item)
-    assert item.gateway_error_code == "SEND_FAILED"
-    assert item.gateway_error_message == "Gateway production detail"
-    assert item.error_message == "Gateway production detail"
+    loaded_item = await test_db.get(DownloadItem, item.id)
+    assert loaded_item is not None
+    assert loaded_item.gateway_error_code == "SEND_FAILED"
+    assert loaded_item.gateway_error_message == "Gateway production detail"
+    assert loaded_item.error_message == "Gateway production detail"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_failed_webhook_sends_failure_notification_once(client: AsyncClient, test_db: AsyncSession):
+    job = DownloadJob(
+        id="job_webhook_duplicate_fail",
+        status="gateway_queued",
+        sender_number="628123456789",
+        inbound_message_id="inbound-dup-fail",
+        webhook_event_id="wh-dup-fail",
+        original_url="http://example.com",
+    )
+    test_db.add(job)
+    item = DownloadItem(
+        job_id=job.id,
+        status="gateway_queued",
+        media_type="video",
+        gateway_message_id="msg-webhook-duplicate-fail",
+        gateway_queue_status="queued",
+    )
+    test_db.add(item)
+    await test_db.commit()
+
+    import hashlib
+    import hmac
+    import json
+    import time
+
+    payload = {
+        "event": "message.failed",
+        "data": {
+            "id": "msg-webhook-duplicate-fail",
+            "last_error_code": "SEND_FAILED",
+            "last_error_message": "Gateway production detail",
+        },
+    }
+    payload_bytes = json.dumps(payload).encode("utf-8")
+    timestamp = str(int(time.time()))
+    message = timestamp.encode("utf-8") + b"." + payload_bytes
+    signature = hmac.new(b"test-webhook-secret-123456", message, hashlib.sha256).hexdigest()
+    headers = {
+        "X-FWAG-Event": "message.failed",
+        "X-FWAG-Event-Id": "wh-evt-duplicate-fail",
+        "X-FWAG-Timestamp": timestamp,
+        "X-FWAG-Signature": signature,
+        "Content-Type": "application/json",
+    }
+
+    with patch("app.gateway.delivery_service.FarrosWAGatewayClient.send_text", new_callable=AsyncMock) as mock_send_text:
+        mock_send_text.return_value.status = "ok"
+        first = await client.post("/webhooks/farros-wa", content=payload_bytes, headers=headers)
+        second = await client.post("/webhooks/farros-wa", content=payload_bytes, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    mock_send_text.assert_called_once()

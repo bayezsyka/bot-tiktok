@@ -17,3 +17,4 @@ class GatewayMessageResponse(BaseModel):
     delivery_status: str | None = None
     http_status: int | None = None
     data: dict | None = None
+    raw_response: dict | None = None
