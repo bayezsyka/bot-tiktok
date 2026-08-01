@@ -66,11 +66,17 @@ class YtDlpProvider(DownloaderProvider):
 
         if process.returncode != 0:
             err_msg = stderr.decode("utf-8", errors="replace")
-            # If yt-dlp says unsupported or photo post / slideshow without video stream
-            if "Unsupported URL" in err_msg or "slideshow" in err_msg.lower() or "image post" in err_msg.lower():
+            # If canonical URL is /photo/ or yt-dlp says unsupported/slideshow/image post
+            if (
+                "/photo/" in canonical_url
+                or "Unsupported URL" in err_msg
+                or "slideshow" in err_msg.lower()
+                or "image post" in err_msg.lower()
+            ):
+                logger.debug(f"yt-dlp passed handling canonical_url: {canonical_url}")
                 return None
             clean_err = self._sanitize_error(err_msg)
-            logger.warning(f"yt-dlp dump-json error: {clean_err}")
+            logger.info(f"yt-dlp dump-json skipped non-video content: {clean_err}")
             return None
 
         try:
