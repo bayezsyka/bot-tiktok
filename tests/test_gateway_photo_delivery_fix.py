@@ -158,11 +158,8 @@ async def test_send_all_media_items_7_photos_and_caption_only_on_pos_1(
         assert k["media_type"] == "photo"
         # 10. Idempotency key uses "photo"
         assert k["idempotency_key"] == f"tiktok-msg_7_photos-photo-{idx:03d}"
-        # 12. Caption only sent on position 1
-        if idx == 1:
-            assert "foto tiktok berhasil diproses" in (k["caption"] or "")
-        else:
-            assert k["caption"] == ""
+        # Caption is empty for ALL positions 1 through N
+        assert k["caption"] == ""
 
     # Re-fetch job from DB
     async with sm() as session:

@@ -544,17 +544,12 @@ class QueueWorker:
                 continue
 
             # Determine caption and idempotency key based on platform
+            caption = ""
             if platform == "instagram":
-                caption = ""
                 idemp_key = f"instagram-{inbound_message_id}-video"
             elif snap["media_type"] == "video":
-                caption = ""
                 idemp_key = f"tiktok-{inbound_message_id}-video"
             else:
-                if snap["position"] == 1:
-                    caption = f"foto tiktok berhasil diproses. total: {total_items} foto."
-                else:
-                    caption = ""
                 idemp_key = f"tiktok-{inbound_message_id}-photo-{snap['position']:03d}"
 
             # Network call (no DB session open)
