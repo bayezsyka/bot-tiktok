@@ -130,6 +130,36 @@ async def test_unclassified_unsupported_url_can_fall_back_to_photo(tmp_path: Pat
 
 
 @pytest.mark.asyncio
+async def test_unclassified_malformed_ytdlp_output_does_not_fall_back_to_photo(
+    tmp_path: Path,
+) -> None:
+    downloader = DownloaderService()
+    snapshot = JobDownloadSnapshot(
+        id="unclassified-malformed",
+        original_url="https://www.tiktok.com/t/ZMalformed/",
+        canonical_url="https://www.tiktok.com/t/ZMalformed/",
+        platform="tiktok",
+        items=(),
+    )
+    process = MockYtDlpProcess(0, stdout=b"not-json")
+
+    with (
+        patch("asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=process),
+        patch.object(
+            downloader.gallery_dl, "extract_metadata", new_callable=AsyncMock
+        ) as mock_gallery,
+        patch.object(
+            downloader.photo_provider, "extract_metadata", new_callable=AsyncMock
+        ) as mock_html,
+    ):
+        with pytest.raises(DownloadError, match="Output metadata yt-dlp"):
+            await downloader.extract_metadata(snapshot, tmp_path)
+
+    mock_gallery.assert_not_awaited()
+    mock_html.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_ytdlp_challenge_on_video_raises_video_challenge(tmp_path: Path) -> None:
     provider = YtDlpProvider()
     process = MockYtDlpProcess(

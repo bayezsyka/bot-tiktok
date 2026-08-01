@@ -248,12 +248,10 @@ class YtDlpProvider(DownloaderProvider):
         try:
             data = json.loads(stdout.decode("utf-8", errors="replace"))
         except Exception as e:
-            if self._canonical_type(canonical_url) == "video":
-                raise DownloadError(
-                    "Output metadata yt-dlp untuk video rusak atau tidak valid.",
-                    user_friendly_message="Video TikTok sementara tidak dapat diproses. Silakan coba kembali.",
-                ) from e
-            return None
+            raise DownloadError(
+                "Output metadata yt-dlp untuk video rusak atau tidak valid.",
+                user_friendly_message="Video TikTok sementara tidak dapat diproses. Silakan coba kembali.",
+            ) from e
 
         # Check for live stream or playlist
         if data.get("is_live") or data.get("live_status") == "is_live":
