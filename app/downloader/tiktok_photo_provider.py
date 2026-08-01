@@ -267,20 +267,27 @@ def _load_netscape_cookies(cookies_file_path: str) -> httpx.Cookies | None:
 
     for line_idx, line in enumerate(lines, start=1):
         line_str = line.strip()
-        if not line_str or line_str.startswith("#") or line_str.startswith("//"):
+        if not line_str:
             continue
+        if line_str.startswith("#HttpOnly_"):
+            line_str = line_str[len("#HttpOnly_"):]
+        elif line_str.startswith("#") or line_str.startswith("//"):
+            continue
+
         parts = line_str.split("\t")
         if len(parts) >= 7:
             domain, flag, path, secure, expiration, name, value = parts[:7]
             try:
                 cookie_name = name.strip()
                 cookie_val = value.strip()
+                cookie_domain = domain.strip()
+                cookie_path = path.strip() or "/"
                 if cookie_name:
                     httpx_cookies.set(
                         cookie_name,
                         cookie_val,
-                        domain=domain.strip() or "www.tiktok.com",
-                        path=path.strip() or "/",
+                        domain=cookie_domain or "www.tiktok.com",
+                        path=cookie_path,
                     )
                     loaded_count += 1
             except Exception as e:

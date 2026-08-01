@@ -26,6 +26,9 @@ class QueueService:
         if not job:
             return None
 
+        if job.status == "sent":
+            return job
+
         job.status = new_status
         job.updated_at = utc_now()
 
@@ -65,6 +68,9 @@ class QueueService:
 
         if not item:
             return None
+
+        if item.status == "sent" or (item.gateway_message_id and status not in ("sent", "completed")):
+            return item
 
         item.status = status
         item.updated_at = utc_now()

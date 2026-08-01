@@ -24,6 +24,7 @@ from app.downloader.exceptions import (
     DownloadError,
     DownloadSizeLimitExceededError,
     DownloadTimeoutError,
+    TikTokChallengeError,
 )
 from app.downloader.service import DownloaderService
 from app.gateway.client import FarrosWAGatewayClient
@@ -353,6 +354,17 @@ class QueueWorker:
                     job_id, sender_number, inbound_message_id, e.user_friendly_message
                 )
                 return
+            except TikTokChallengeError as e:
+                logger.warning(f"[Stage: Extraction] TikTok challenge detected for job {job_id}: {e.message}")
+                await self._update_job_status_safe(
+                    job_id, "failed",
+                    error_code="TIKTOK_CHALLENGE_PAGE",
+                    error_message=e.user_friendly_message,
+                )
+                await self._send_failure_notification(
+                    job_id, sender_number, inbound_message_id, e.user_friendly_message
+                )
+                return
             except (DownloadTimeoutError, DownloadError, Exception) as e:
                 logger.error(f"[Stage: Extraction] Extraction error on job {job_id}: {e}")
                 user_msg = getattr(e, "user_friendly_message", None)
@@ -377,6 +389,17 @@ class QueueWorker:
                 await self._update_job_status_safe(
                     job_id, "failed",
                     error_code="SIZE_EXCEEDED",
+                    error_message=e.user_friendly_message,
+                )
+                await self._send_failure_notification(
+                    job_id, sender_number, inbound_message_id, e.user_friendly_message
+                )
+                return
+            except TikTokChallengeError as e:
+                logger.warning(f"[Stage: Download] TikTok challenge detected for job {job_id}: {e.message}")
+                await self._update_job_status_safe(
+                    job_id, "failed",
+                    error_code="TIKTOK_CHALLENGE_PAGE",
                     error_message=e.user_friendly_message,
                 )
                 await self._send_failure_notification(

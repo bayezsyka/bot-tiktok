@@ -214,3 +214,49 @@ async def test_queue_worker_handles_202_without_message_id_failure(test_db: Asyn
     finally:
         if os.path.exists(dummy_file.name):
             os.unlink(dummy_file.name)
+
+
+@pytest.mark.asyncio
+async def test_queue_worker_handles_tiktok_challenge_error(test_db: AsyncSession) -> None:
+    session_maker = async_sessionmaker(bind=test_db.bind, class_=AsyncSession, expire_on_commit=False)
+
+    async with session_maker() as session:
+        job_repo = JobRepository(session)
+        job = await job_repo.create_job(
+            inbound_message_id="msg-worker-challenge",
+            webhook_event_id="evt-worker-challenge",
+            sender_number="628123456789",
+            original_url="https://www.tiktok.com/@ade_meliora/photo/7668360024648846599",
+            canonical_url="https://www.tiktok.com/@ade_meliora/photo/7668360024648846599",
+        )
+        await session.commit()
+        job_id = job.id
+
+    worker = QueueWorker(session_maker)
+
+    from app.downloader.exceptions import TikTokChallengeError
+
+    with patch("app.downloader.service.DownloaderService.extract_metadata", new_callable=AsyncMock) as mock_extract, \
+         patch.object(worker, "_handle_job_error", new_callable=AsyncMock) as mock_handle_error, \
+         patch.object(worker.gateway, "send_text", new_callable=AsyncMock) as mock_send_text:
+
+        mock_extract.side_effect = TikTokChallengeError("Challenge detected")
+        mock_send_text.return_value = GatewayMessageResponse(status="ok", message_id="wa-notify-challenge")
+
+        await worker._process_job_safely(job_id)
+
+        # Ensure no ~10s retry backoff handler was called
+        mock_handle_error.assert_not_called()
+
+        # Ensure failure notification sent once
+        mock_send_text.assert_called_once()
+        sent_args = mock_send_text.call_args[1]
+        assert "TikTok sementara menolak akses downloader" in sent_args["text"]
+
+    async with session_maker() as session:
+        job_repo = JobRepository(session)
+        finished_job = await job_repo.get_by_id(job_id)
+        assert finished_job is not None
+        assert finished_job.status == "failed"
+        assert finished_job.error_code == "TIKTOK_CHALLENGE_PAGE"
+        assert "TikTok sementara menolak akses downloader" in (finished_job.error_message or "")

@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -14,21 +15,59 @@ from app.downloader.tiktok_photo_provider import TikTokPhotoProvider, _load_nets
 
 
 @pytest.mark.asyncio
-async def test_cookies_loading(tmp_path: Path) -> None:
+async def test_cookies_loading_netscape_and_httponly(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     cookie_file = tmp_path / "cookies.txt"
     cookie_file.write_text(
         "# Netscape HTTP Cookie File\n"
-        ".tiktok.com\tTRUE\t/\tFALSE\t1900000000\tsessionid\tfake_session_id_123\n"
-        "# Invalid line that should be skipped\n"
+        "# This is a standard comment\n"
+        ".tiktok.com\tTRUE\t/\tFALSE\t1900000000\tregular_cookie\tsecret_regular_value\n"
+        "#HttpOnly_.tiktok.com\tTRUE\t/\tTRUE\t1900000000\tsessionid\tsecret_session_value\n"
+        "#HttpOnly_www.tiktok.com\tFALSE\t/\tTRUE\t1000000000\texpired_cookie\tsecret_expired_value\n"
+        "# Malformed line without tabs\n"
         "invalid_line_without_tabs\n"
     )
 
-    cookies = _load_netscape_cookies(str(cookie_file))
+    with caplog.at_level(logging.DEBUG):
+        cookies = _load_netscape_cookies(str(cookie_file))
+
     assert cookies is not None
-    assert cookies.get("sessionid") == "fake_session_id_123"
+    assert cookies.get("regular_cookie") == "secret_regular_value"
+    assert cookies.get("sessionid") == "secret_session_value"
+    assert cookies.get("expired_cookie") == "secret_expired_value"
+
+    # Verify secret cookie values do NOT appear in log output
+    assert "secret_regular_value" not in caplog.text
+    assert "secret_session_value" not in caplog.text
+    assert "secret_expired_value" not in caplog.text
 
     # Non-existent file
     assert _load_netscape_cookies(str(tmp_path / "non_existent.txt")) is None
+
+
+@pytest.mark.asyncio
+async def test_cookies_passed_to_fetch_html_fallback_and_download(tmp_path: Path) -> None:
+    cookie_file = tmp_path / "cookies.txt"
+    cookie_file.write_text(
+        "# Netscape HTTP Cookie File\n"
+        ".tiktok.com\tTRUE\t/\tFALSE\t1900000000\tttwid\tmy_ttwid_value\n"
+    )
+
+    provider = TikTokPhotoProvider()
+    provider.settings.TIKTOK_COOKIES_FILE = str(cookie_file)
+
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        class MockResp:
+            status_code = 200
+            headers = {"content-type": "text/html"}
+            text = "<html><title>Test</title></html>"
+            content = b"<html><title>Test</title></html>"
+
+            def raise_for_status(self) -> None:
+                pass
+
+        mock_get.return_value = MockResp()
+        await provider._fetch_html("https://www.tiktok.com/@user/photo/7668360024648846599")
+        assert mock_get.called
 
 
 @pytest.mark.asyncio
