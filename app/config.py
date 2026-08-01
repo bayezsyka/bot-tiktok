@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     FARROS_WA_LID_MAP: str = ""
 
     YT_DLP_BINARY: str = "yt-dlp"
+    GALLERY_DL_BINARY: str = "gallery-dl"
 
     FFMPEG_BINARY: str = "ffmpeg"
     FFPROBE_BINARY: str = "ffprobe"
@@ -83,6 +84,7 @@ class Settings(BaseSettings):
         # Check binary availability in PATH if not absolute paths
         for _binary_name, binary_path in [
             ("yt-dlp", self.YT_DLP_BINARY),
+            ("gallery-dl", self.GALLERY_DL_BINARY),
             ("ffmpeg", self.FFMPEG_BINARY),
             ("ffprobe", self.FFPROBE_BINARY),
         ]:

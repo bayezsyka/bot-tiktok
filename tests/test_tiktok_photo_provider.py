@@ -99,7 +99,7 @@ async def test_unsupported_ytdlp_transitions_to_photo_provider(tmp_path: Path) -
     snapshot = JobDownloadSnapshot(
         id="test_job_1",
         original_url="https://vt.tiktok.com/ZS4htbqUV/",
-        canonical_url="https://www.tiktok.com/@ade_meliora/photo/7668360024648846599",
+        canonical_url="https://www.tiktok.com/@ade_meliora/v/7668360024648846599",
         platform="tiktok",
         items=(),
     )
@@ -119,14 +119,17 @@ async def test_unsupported_ytdlp_transitions_to_photo_provider(tmp_path: Path) -
     )
 
     with patch.object(service.yt_dlp, "extract_metadata", new_callable=AsyncMock) as mock_ytdlp, \
+         patch.object(service.gallery_dl, "extract_metadata", new_callable=AsyncMock) as mock_gdl, \
          patch.object(service.photo_provider, "extract_metadata", new_callable=AsyncMock) as mock_photo:
         mock_ytdlp.return_value = None  # yt-dlp passed/unsupported
+        mock_gdl.return_value = None
         mock_photo.return_value = fake_metadata
 
         res = await service.extract_metadata(snapshot, tmp_path)
         assert res.metadata == fake_metadata
         assert res.provider == service.photo_provider
         mock_ytdlp.assert_called_once()
+        mock_gdl.assert_called_once()
         mock_photo.assert_called_once()
 
 

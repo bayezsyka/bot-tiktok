@@ -63,6 +63,7 @@ async def health_check() -> JSONResponse:
     disk_free = check_disk_space()
 
     yt_dlp_status = "available" if shutil.which(settings.YT_DLP_BINARY) else "missing"
+    gallery_dl_status = "available" if shutil.which(settings.GALLERY_DL_BINARY) else "missing"
     ffmpeg_status = "available" if shutil.which(settings.FFMPEG_BINARY) else "missing"
 
     return JSONResponse(
@@ -73,6 +74,7 @@ async def health_check() -> JSONResponse:
             "queue_size": queue_size,
             "disk_free_bytes": disk_free,
             "yt_dlp": yt_dlp_status,
+            "gallery_dl": gallery_dl_status,
             "ffmpeg": ffmpeg_status,
             "timestamp": datetime.now(UTC).isoformat(),
         }

@@ -9,6 +9,7 @@ from app.downloader.dtos import (
     JobDownloadSnapshot,
 )
 from app.downloader.exceptions import DownloadError
+from app.downloader.gallery_dl_tiktok_photo_provider import GalleryDlTikTokPhotoProvider
 from app.downloader.instagram_provider import InstagramReelProvider
 from app.downloader.metadata import MediaContentMetadata
 from app.downloader.providers import DownloaderProvider
@@ -19,10 +20,10 @@ from app.security.urls import resolve_canonical_tiktok_url
 logger = logging.getLogger(__name__)
 
 
-
 class DownloaderService:
     def __init__(self) -> None:
         self.yt_dlp = YtDlpProvider()
+        self.gallery_dl = GalleryDlTikTokPhotoProvider()
         self.photo_provider = TikTokPhotoProvider()
         self.ig_provider = InstagramReelProvider()
 
@@ -57,12 +58,29 @@ class DownloaderService:
                 )
         else:
             # TikTok platform
-            metadata = await self.yt_dlp.extract_metadata(canonical_url, job_dir)
-            provider = self.yt_dlp
+            is_photo_url = "/photo/" in canonical_url
 
-            if not metadata:
-                metadata = await self.photo_provider.extract_metadata(canonical_url, job_dir)
-                provider = self.photo_provider
+            if is_photo_url:
+                # Primary for /photo/: gallery-dl
+                metadata = await self.gallery_dl.extract_metadata(canonical_url, job_dir)
+                provider = self.gallery_dl
+
+                # Fallback to HTML parser if gallery-dl returned None
+                if not metadata:
+                    metadata = await self.photo_provider.extract_metadata(canonical_url, job_dir)
+                    provider = self.photo_provider
+            else:
+                # Primary for video / unclassified: yt-dlp first
+                metadata = await self.yt_dlp.extract_metadata(canonical_url, job_dir)
+                provider = self.yt_dlp
+
+                if not metadata:
+                    metadata = await self.gallery_dl.extract_metadata(canonical_url, job_dir)
+                    provider = self.gallery_dl
+
+                if not metadata:
+                    metadata = await self.photo_provider.extract_metadata(canonical_url, job_dir)
+                    provider = self.photo_provider
 
             if not metadata or not metadata.items:
                 raise DownloadError(
@@ -119,7 +137,7 @@ class DownloaderService:
             else:
                 raise DownloadError(
                     f"File fisik hasil download untuk posisi {item_meta.position} tidak ditemukan di disk.",
-                    user_friendly_message="Gagal mengunduh file media. File tidak ditemukan."
+                    user_friendly_message="Gagal mengunduh file media. File tidak ditemukan.",
                 )
 
         # Verify no non-sent item is left without a local_filename
@@ -133,7 +151,7 @@ class DownloaderService:
                     continue
                 raise DownloadError(
                     f"Item posisi {item.position} tidak memiliki file hasil unduhan lokal.",
-                    user_friendly_message="Gagal mengunduh seluruh file media."
+                    user_friendly_message="Gagal mengunduh seluruh file media.",
                 )
 
         return DownloadedContentResult(
