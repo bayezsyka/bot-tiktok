@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from dataclasses import replace
 from typing import TypedDict
 
 from sqlalchemy import select
@@ -185,6 +186,16 @@ class QueueWorker:
                         )
                         session.add(item)
 
+    async def _save_canonical_url(self, job_id: str, canonical_url: str) -> None:
+        """Persist only canonical_url and updated_at in a short-lived transaction."""
+        async with self.session_maker() as session:
+            async with session.begin():
+                job = await session.get(DownloadJob, job_id)
+                if not job:
+                    return
+                job.canonical_url = canonical_url
+                job.updated_at = utc_now()
+
     async def _save_downloaded_results(
         self, job_id: str, result: DownloadedContentResult
     ) -> None:
@@ -341,6 +352,10 @@ class QueueWorker:
             job_snapshot, attempt_count, sender_number, inbound_message_id = extraction_snapshot
 
             try:
+                canonical_url = await downloader.resolve_canonical_url(job_snapshot)
+                if canonical_url != job_snapshot.canonical_url:
+                    await self._save_canonical_url(job_id, canonical_url)
+                    job_snapshot = replace(job_snapshot, canonical_url=canonical_url)
                 extracted = await downloader.extract_metadata(job_snapshot, job_dir)
                 await self._save_extracted_metadata(job_id, extracted)
             except (ContentNotSupportedError, DownloadSizeLimitExceededError) as e:
@@ -356,13 +371,12 @@ class QueueWorker:
                 return
             except TikTokChallengeError as e:
                 logger.warning(f"[Stage: Extraction] TikTok challenge detected for job {job_id}: {e.message}")
-                await self._update_job_status_safe(
-                    job_id, "failed",
-                    error_code="TIKTOK_CHALLENGE_PAGE",
-                    error_message=e.user_friendly_message,
-                )
-                await self._send_failure_notification(
-                    job_id, sender_number, inbound_message_id, e.user_friendly_message
+                await self._handle_job_error(
+                    job_id,
+                    e.message,
+                    attempt_count,
+                    e.user_friendly_message,
+                    final_error_code="TIKTOK_CHALLENGE_PAGE",
                 )
                 return
             except (DownloadTimeoutError, DownloadError, Exception) as e:
@@ -397,13 +411,12 @@ class QueueWorker:
                 return
             except TikTokChallengeError as e:
                 logger.warning(f"[Stage: Download] TikTok challenge detected for job {job_id}: {e.message}")
-                await self._update_job_status_safe(
-                    job_id, "failed",
-                    error_code="TIKTOK_CHALLENGE_PAGE",
-                    error_message=e.user_friendly_message,
-                )
-                await self._send_failure_notification(
-                    job_id, sender_number, inbound_message_id, e.user_friendly_message
+                await self._handle_job_error(
+                    job_id,
+                    e.message,
+                    attempt_count,
+                    e.user_friendly_message,
+                    final_error_code="TIKTOK_CHALLENGE_PAGE",
                 )
                 return
             except Exception as e:
@@ -738,7 +751,12 @@ class QueueWorker:
             logger.error(f"Failed to update item {item_id} status: {e}")
 
     async def _handle_job_error(
-        self, job_id: str, error_msg: str, attempt_count: int, user_friendly_message: str | None = None
+        self,
+        job_id: str,
+        error_msg: str,
+        attempt_count: int,
+        user_friendly_message: str | None = None,
+        final_error_code: str = "MAX_RETRIES_EXCEEDED",
     ) -> None:
         """Handle job error without holding a DB session during retry backoff."""
         if attempt_count < self.settings.MAX_JOB_RETRIES:
@@ -787,7 +805,7 @@ class QueueWorker:
 
                     logger.warning(f"Job {job_id} failed permanently after {attempt_count} attempts. Error: {error_msg}")
                     await queue_service.update_job_status(
-                        job_id, "failed", error_code="MAX_RETRIES_EXCEEDED", error_message=error_msg[:300]
+                        job_id, "failed", error_code=final_error_code, error_message=error_msg[:300]
                     )
 
                     await recovery_session.commit()

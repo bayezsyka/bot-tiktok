@@ -1,6 +1,7 @@
 import logging
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from app.downloader.dtos import (
     DownloadedContentResult,
@@ -8,14 +9,14 @@ from app.downloader.dtos import (
     ExtractedMetadataResult,
     JobDownloadSnapshot,
 )
-from app.downloader.exceptions import DownloadError
+from app.downloader.exceptions import ContentNotSupportedError, DownloadError
 from app.downloader.gallery_dl_tiktok_photo_provider import GalleryDlTikTokPhotoProvider
 from app.downloader.instagram_provider import InstagramReelProvider
 from app.downloader.metadata import MediaContentMetadata
 from app.downloader.providers import DownloaderProvider
 from app.downloader.tiktok_photo_provider import TikTokPhotoProvider
 from app.downloader.yt_dlp_provider import YtDlpProvider
-from app.security.urls import resolve_canonical_tiktok_url
+from app.security.urls import check_url_security, resolve_canonical_tiktok_url
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,44 @@ class DownloaderService:
         self.photo_provider = TikTokPhotoProvider()
         self.ig_provider = InstagramReelProvider()
 
+    @staticmethod
+    def _canonical_type(canonical_url: str) -> str | None:
+        path = urlsplit(canonical_url).path.lower()
+        if "/video/" in path:
+            return "video"
+        if "/photo/" in path:
+            return "photo"
+        return None
+
+    async def resolve_canonical_url(self, snapshot: JobDownloadSnapshot) -> str:
+        """Resolve short TikTok links without opening or using a database session."""
+        if snapshot.canonical_url:
+            return snapshot.canonical_url
+
+        is_safe, detected_platform = check_url_security(snapshot.original_url)
+        if not is_safe or not detected_platform:
+            raise DownloadError(
+                "Link media tidak valid atau tidak aman.",
+                user_friendly_message="Link media tidak valid, berisiko, atau tidak dapat diakses.",
+            )
+
+        parsed = urlsplit(snapshot.original_url)
+        hostname = (parsed.hostname or "").lower()
+        is_tiktok_short_url = detected_platform == "tiktok" and (
+            hostname in {"vt.tiktok.com", "vm.tiktok.com"}
+            or parsed.path.lower().startswith("/t/")
+        )
+        if not is_tiktok_short_url:
+            return snapshot.original_url
+
+        canonical_url = await resolve_canonical_tiktok_url(snapshot.original_url)
+        if not canonical_url:
+            raise DownloadError(
+                "Link media tidak valid atau tidak aman.",
+                user_friendly_message="Link media tidak valid, berisiko, atau tidak dapat diakses.",
+            )
+        return canonical_url
+
     async def extract_metadata(
         self, snapshot: JobDownloadSnapshot, job_dir: Path
     ) -> ExtractedMetadataResult:
@@ -35,15 +74,7 @@ class DownloaderService:
         """
         platform = snapshot.platform or "tiktok"
 
-        if not snapshot.canonical_url:
-            canonical_url = await resolve_canonical_tiktok_url(snapshot.original_url)
-            if not canonical_url:
-                raise DownloadError(
-                    "Link media tidak valid atau tidak aman.",
-                    user_friendly_message="Link media tidak valid, berisiko, atau tidak dapat diakses.",
-                )
-        else:
-            canonical_url = snapshot.canonical_url
+        canonical_url = await self.resolve_canonical_url(snapshot)
 
         provider: DownloaderProvider
         metadata: MediaContentMetadata | None = None
@@ -58,26 +89,40 @@ class DownloaderService:
                 )
         else:
             # TikTok platform
-            is_photo_url = "/photo/" in canonical_url
+            canonical_type = self._canonical_type(canonical_url)
 
-            if is_photo_url:
+            if canonical_type == "photo":
                 # Primary for /photo/: gallery-dl
-                metadata = await self.gallery_dl.extract_metadata(canonical_url, job_dir)
                 provider = self.gallery_dl
+                gallery_empty_error: ContentNotSupportedError | None = None
+                try:
+                    metadata = await self.gallery_dl.extract_metadata(canonical_url, job_dir)
+                except ContentNotSupportedError as exc:
+                    gallery_empty_error = exc
 
-                # Fallback to HTML parser if gallery-dl returned None
+                # Fallback to HTML parser if gallery-dl returned no slides.
                 if not metadata:
                     metadata = await self.photo_provider.extract_metadata(canonical_url, job_dir)
                     provider = self.photo_provider
-            else:
-                # Primary for video / unclassified: yt-dlp first
+
+                if (not metadata or not metadata.items) and gallery_empty_error:
+                    raise gallery_empty_error
+            elif canonical_type == "video":
+                # A classified video is terminally owned by yt-dlp. Photo providers must not mask it.
                 metadata = await self.yt_dlp.extract_metadata(canonical_url, job_dir)
                 provider = self.yt_dlp
-
+                if not metadata or not metadata.items:
+                    raise DownloadError(
+                        "yt-dlp tidak menghasilkan metadata untuk canonical URL /video/.",
+                        user_friendly_message="Video TikTok sementara tidak dapat diproses. Silakan coba kembali.",
+                    )
+            else:
+                # For an unclassified path, yt-dlp returns None only for explicit non-video hints.
+                metadata = await self.yt_dlp.extract_metadata(canonical_url, job_dir)
+                provider = self.yt_dlp
                 if not metadata:
                     metadata = await self.gallery_dl.extract_metadata(canonical_url, job_dir)
                     provider = self.gallery_dl
-
                 if not metadata:
                     metadata = await self.photo_provider.extract_metadata(canonical_url, job_dir)
                     provider = self.photo_provider

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from app.database.models import Base, DownloadItem, DownloadJob, utc_now
 from app.downloader.dtos import ProcessedItemResult, ProcessedJobResult
+from app.downloader.exceptions import ContentNotSupportedError
 from app.downloader.metadata import TikTokContentMetadata, TikTokMediaItemMetadata
 from app.gateway.schemas import GatewayMessageResponse
 from app.queue.reconciler import GatewayReconciler
@@ -133,6 +134,73 @@ async def test_short_sessions_do_not_block_each_other(real_sqlite):
 
         j = (await s.execute(select(DownloadJob).where(DownloadJob.id == "conc-1"))).scalar_one()
         assert j.status == "sending"
+
+
+@pytest.mark.asyncio
+async def test_canonical_resolution_and_provider_run_outside_sqlite_transaction(real_sqlite):
+    engine, sm = real_sqlite
+    short_url = "https://vt.tiktok.com/ZS4B1DxAc/"
+    canonical_url = "https://www.tiktok.com/@farhan_sukabola/video/7669081226115943700"
+
+    async with sm() as session:
+        session.add(
+            DownloadJob(
+                id="canonical-outside-txn",
+                status="queued",
+                sender_number="628000000099",
+                inbound_message_id="inb-canonical-outside-txn",
+                webhook_event_id="wh-canonical-outside-txn",
+                original_url=short_url,
+                canonical_url=None,
+            )
+        )
+        await session.commit()
+
+    tracker = TransactionTracker()
+    tracker.install(engine)
+    resolution_checked = False
+    provider_checked = False
+
+    async def fake_resolution(*_args):
+        nonlocal resolution_checked
+        assert tracker.active == 0
+        resolution_checked = True
+        await asyncio.sleep(0)
+        assert tracker.active == 0
+        return canonical_url
+
+    async def fake_extract(*_args):
+        nonlocal provider_checked
+        assert tracker.active == 0
+        provider_checked = True
+        raise ContentNotSupportedError(
+            "Video unavailable", user_friendly_message="Video TikTok tidak tersedia."
+        )
+
+    worker = QueueWorker(sm)
+    with (
+        patch(
+            "app.downloader.service.DownloaderService.resolve_canonical_url",
+            new_callable=AsyncMock,
+            side_effect=fake_resolution,
+        ),
+        patch(
+            "app.downloader.service.YtDlpProvider.extract_metadata",
+            new_callable=AsyncMock,
+            side_effect=fake_extract,
+        ),
+        patch.object(worker, "_send_failure_notification", new_callable=AsyncMock),
+    ):
+        await worker._process_job_safely("canonical-outside-txn")
+
+    assert resolution_checked is True
+    assert provider_checked is True
+    assert tracker.active == 0
+    async with sm() as session:
+        job = await session.get(DownloadJob, "canonical-outside-txn")
+        assert job is not None
+        assert job.status == "failed"
+        assert job.canonical_url == canonical_url
 
 
 @pytest.mark.asyncio

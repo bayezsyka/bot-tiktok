@@ -6,11 +6,13 @@ import shutil
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from app.config import get_settings
 from app.downloader.exceptions import (
+    ContentNotSupportedError,
     DownloadError,
     DownloadSizeLimitExceededError,
     DownloadTimeoutError,
@@ -256,10 +258,31 @@ class GalleryDlTikTokPhotoProvider(DownloaderProvider):
             metadata = None
 
         slide_count = len(metadata.items) if metadata else 0
+        try:
+            parsed_output = json.loads(stdout_text) if stdout_text.strip() else []
+            metadata_entries = len(parsed_output) if isinstance(parsed_output, list) else 0
+        except (TypeError, ValueError):
+            metadata_entries = 0
+
+        if not metadata or not metadata.items:
+            logger.warning(
+                f"TikTok photo extraction empty: platform=tiktok provider=gallery-dl result=empty "
+                f"item_id={item_id} cookie_configured={cookie_configured} exit_code={exit_code} "
+                f"metadata_entries={metadata_entries} slide_count=0 "
+                f"challenge_detected={challenge_detected} elapsed_seconds={elapsed_sec:.2f}"
+            )
+            if "/photo/" in urlsplit(canonical_url).path.lower():
+                raise ContentNotSupportedError(
+                    "gallery-dl selesai tanpa menghasilkan slide untuk canonical URL /photo/.",
+                    user_friendly_message="Slide foto TikTok tidak ditemukan atau postingan tidak tersedia.",
+                )
+            return None
+
         logger.info(
-            f"TikTok photo extraction completed: platform=tiktok content_type=photo provider=gallery-dl "
+            f"TikTok photo extraction completed: platform=tiktok content_type=photo provider=gallery-dl result=success "
             f"item_id={item_id} cookie_configured={cookie_configured} exit_code={exit_code} "
-            f"slide_count={slide_count} challenge_detected={challenge_detected} elapsed_seconds={elapsed_sec:.2f}"
+            f"metadata_entries={metadata_entries} slide_count={slide_count} "
+            f"challenge_detected={challenge_detected} elapsed_seconds={elapsed_sec:.2f}"
         )
 
         return metadata

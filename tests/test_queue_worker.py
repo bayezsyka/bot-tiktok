@@ -217,7 +217,7 @@ async def test_queue_worker_handles_202_without_message_id_failure(test_db: Asyn
 
 
 @pytest.mark.asyncio
-async def test_queue_worker_handles_tiktok_challenge_error(test_db: AsyncSession) -> None:
+async def test_queue_worker_retries_tiktok_challenge_error(test_db: AsyncSession) -> None:
     session_maker = async_sessionmaker(bind=test_db.bind, class_=AsyncSession, expire_on_commit=False)
 
     async with session_maker() as session:
@@ -245,18 +245,11 @@ async def test_queue_worker_handles_tiktok_challenge_error(test_db: AsyncSession
 
         await worker._process_job_safely(job_id)
 
-        # Ensure no ~10s retry backoff handler was called
-        mock_handle_error.assert_not_called()
-
-        # Ensure failure notification sent once
-        mock_send_text.assert_called_once()
-        sent_args = mock_send_text.call_args[1]
-        assert "TikTok sementara menolak akses downloader" in sent_args["text"]
-
-    async with session_maker() as session:
-        job_repo = JobRepository(session)
-        finished_job = await job_repo.get_by_id(job_id)
-        assert finished_job is not None
-        assert finished_job.status == "failed"
-        assert finished_job.error_code == "TIKTOK_CHALLENGE_PAGE"
-        assert "TikTok sementara menolak akses downloader" in (finished_job.error_message or "")
+        mock_handle_error.assert_awaited_once_with(
+            job_id,
+            "Challenge detected",
+            0,
+            "TikTok sementara menolak akses downloader. Silakan coba kembali beberapa saat lagi.",
+            final_error_code="TIKTOK_CHALLENGE_PAGE",
+        )
+        mock_send_text.assert_not_called()
