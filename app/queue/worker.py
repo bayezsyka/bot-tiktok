@@ -569,18 +569,16 @@ class QueueWorker:
                 )
             except GatewayResponseError as e:
                 logger.error(f"[Stage: Sending] GatewayResponseError sending item {snap['id']} for job {job_id}: status={e.status_code}, message={e.message}")
-                await self._process_send_failure(snap["id"], f"Gateway error: {e.message}")
+                await self._process_send_failure(snap["id"], f"Gateway error: {e.message}", defer_job_sync=True)
                 failed_count += 1
                 continue
             except GatewayError as e:
                 logger.warning(f"[Stage: Sending] Network error sending item {snap['id']} for job {job_id}: {e}")
-                await self._process_send_failure(snap["id"], str(e))
+                await self._process_send_failure(snap["id"], str(e), defer_job_sync=True)
                 failed_count += 1
                 continue
 
             # Write result with fresh session
-            notification_job_id: str | None = None
-            notification_required = False
             try:
                 async with self.session_maker() as session:
                     try:
@@ -599,14 +597,13 @@ class QueueWorker:
                             logger.error(f"[Stage: Sending] Upload succeeded but gateway did not return a message ID for item {snap['id']} of job {job_id}")
                             from app.gateway.delivery_service import GatewayDeliveryService
                             delivery_service = GatewayDeliveryService(session)
-                            sync_result = await delivery_service.process_outbound_status(
+                            await delivery_service.process_outbound_status(
                                 item=item2,
                                 q_status="failed",
                                 error_code="GATEWAY_INVALID_RESPONSE",
-                                error_message="Gateway menerima upload tetapi tidak memberikan message ID"
+                                error_message="Gateway menerima upload tetapi tidak memberikan message ID",
+                                defer_job_sync=True,
                             )
-                            notification_job_id = sync_result.job_id
-                            notification_required = sync_result.notification_required
                             failed_count += 1
                             await session.commit()
                         else:
@@ -616,13 +613,12 @@ class QueueWorker:
                             delivery_service = GatewayDeliveryService(session)
 
                             q_status = response.queue_status or "queued"
-                            sync_result = await delivery_service.process_outbound_status(
+                            await delivery_service.process_outbound_status(
                                 item=item2,
                                 d_status=response.delivery_status,
-                                q_status=q_status
+                                q_status=q_status,
+                                defer_job_sync=True,
                             )
-                            notification_job_id = sync_result.job_id
-                            notification_required = sync_result.notification_required
                             sent_count += 1
                             await session.commit()
                     except Exception as e:
@@ -635,28 +631,31 @@ class QueueWorker:
             except Exception as e:
                 logger.error(f"[Stage: Sending] Session error for item {snap['id']}: {e}")
                 failed_count += 1
-            if notification_job_id and notification_required:
-                await dispatch_failure_notification(
-                    self.session_maker,
-                    notification_job_id,
-                    gateway=self.gateway,
-                )
 
-        # Final job status sync with fresh session
-        notification_job_id = None
+        # Final job status sync with fresh session (calculating real counters from database)
+        notification_job_id: str | None = None
         notification_required = False
         try:
             async with self.session_maker() as session:
                 try:
                     from sqlalchemy import select
 
-                    from app.database.models import DownloadJob
+                    from app.database.models import DownloadItem, DownloadJob
+                    stmt_items = select(DownloadItem).where(DownloadItem.job_id == job_id)
+                    res_items = await session.execute(stmt_items)
+                    db_items = res_items.scalars().all()
+
                     stmt3 = select(DownloadJob).where(DownloadJob.id == job_id)
                     result3 = await session.execute(stmt3)
                     job = result3.scalar_one_or_none()
-                    if job:
-                        job.sent_count = sent_count
-                        job.failed_count = failed_count
+                    if job and db_items:
+                        total_cnt = len(db_items)
+                        s_cnt = sum(1 for i in db_items if i.status in ("sent", "completed") or i.gateway_message_id)
+                        f_cnt = sum(1 for i in db_items if i.status in ("failed", "cancelled") and not i.gateway_message_id)
+
+                        job.media_count = total_cnt
+                        job.sent_count = s_cnt
+                        job.failed_count = f_cnt
 
                         from app.gateway.delivery_service import GatewayDeliveryService
                         delivery_service = GatewayDeliveryService(session)
@@ -673,6 +672,7 @@ class QueueWorker:
                     logger.error(f"[Stage: Sending] Final job sync failed for {job_id}: {e}")
         except Exception as e:
             logger.error(f"[Stage: Sending] Final session error for {job_id}: {e}")
+
         if notification_job_id and notification_required:
             await dispatch_failure_notification(
                 self.session_maker,
@@ -680,7 +680,9 @@ class QueueWorker:
                 gateway=self.gateway,
             )
 
-    async def _process_send_failure(self, item_id: int, error_message: str) -> None:
+    async def _process_send_failure(
+        self, item_id: int, error_message: str, defer_job_sync: bool = False
+    ) -> None:
         """Record a send failure for an item using a fresh session."""
         notification_job_id: str | None = None
         notification_required = False
@@ -699,7 +701,8 @@ class QueueWorker:
                         sync_result = await delivery_service.process_outbound_status(
                             item=item,
                             q_status="failed",
-                            error_message=error_message
+                            error_message=error_message,
+                            defer_job_sync=defer_job_sync,
                         )
                         notification_job_id = sync_result.job_id
                         notification_required = sync_result.notification_required
@@ -709,11 +712,11 @@ class QueueWorker:
                         await session.rollback()
                     except Exception:
                         pass
-                    logger.error(f"Failed to record send failure for item {item_id}: {e}")
+                    logger.error(f"[Stage: Sending] DB error saving failure for item {item_id}: {e}")
         except Exception as e:
-            logger.error(f"Session error recording send failure for item {item_id}: {e}")
-            return
-        if notification_job_id and notification_required:
+            logger.error(f"[Stage: Sending] Session error saving failure for item {item_id}: {e}")
+
+        if not defer_job_sync and notification_job_id and notification_required:
             await dispatch_failure_notification(
                 self.session_maker,
                 notification_job_id,

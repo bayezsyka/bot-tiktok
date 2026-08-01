@@ -55,6 +55,7 @@ class GatewayDeliveryService:
         error_code: str | None = None,
         send_dispatched_at: datetime | None = None,
         whatsapp_message_id: str | None = None,
+        defer_job_sync: bool = False,
     ) -> StatusSyncResult:
         """
         Process outbound status idempotently and monotonically.
@@ -82,6 +83,8 @@ class GatewayDeliveryService:
                     or "Gateway sudah meneruskan pesan, tetapi hasil final dari WhatsApp belum diterima."
                 )
             await self.db.flush()
+            if defer_job_sync:
+                return StatusSyncResult(job_id=item.job_id, notification_required=False)
             return await self.sync_job_status(item.job_id)
 
         # Handle Queue Status
@@ -172,6 +175,9 @@ class GatewayDeliveryService:
 
         await self.db.flush()
 
+        if defer_job_sync:
+            return StatusSyncResult(job_id=item.job_id, notification_required=False)
+
         # Sync overall job status
         return await self.sync_job_status(item.job_id)
 
@@ -189,7 +195,7 @@ class GatewayDeliveryService:
         total = len(items)
         completed_count = sum(1 for i in items if i.status == "completed")
         failed_count = sum(1 for i in items if i.status in ("failed", "cancelled"))
-        sent_count = sum(1 for i in items if i.status == "sent")
+        sent_count = sum(1 for i in items if i.status in ("sent", "completed") or i.gateway_message_id)
         queued_count = sum(1 for i in items if i.status == "gateway_queued")
         processing_count = sum(1 for i in items if i.status == "gateway_processing")
         unknown_count = sum(1 for i in items if i.status == "delivery_unknown")
@@ -227,10 +233,20 @@ class GatewayDeliveryService:
             new_job_status = "gateway_processing"
         elif queued_count > 0:
             new_job_status = "gateway_queued"
-        elif sent_count + completed_count == total:
+        elif sum(1 for i in items if i.status == "sent") + completed_count == total:
             new_job_status = "sent"
 
-        if job.status != new_job_status:
+        if (
+            job.status != new_job_status
+            or job.error_code != error_code
+            or job.error_message != error_message
+            or job.sent_count != sent_count
+            or job.failed_count != failed_count
+            or job.media_count != total
+        ):
+            job.media_count = total
+            job.sent_count = sent_count
+            job.failed_count = failed_count
             await self.queue_service.update_job_status(
                 job_id,
                 new_status=new_job_status,

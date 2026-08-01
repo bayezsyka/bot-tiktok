@@ -21,6 +21,38 @@ logger = logging.getLogger(__name__)
 IDEMPOTENCY_KEY_REGEX = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 
 
+GATEWAY_MEDIA_TYPE_MAP = {
+    "photo": "image",
+    "image": "image",
+    "video": "video",
+    "audio": "audio",
+    "voice_note": "voice_note",
+    "document": "document",
+    "sticker": "sticker",
+}
+
+EXT_MIME_MAP = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".mp4": "video/mp4",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".pdf": "application/pdf",
+}
+
+ALLOWED_EXT_PER_GATEWAY_TYPE = {
+    "image": {".jpg", ".jpeg", ".png", ".webp", ".gif"},
+    "video": {".mp4"},
+    "audio": {".mp3", ".ogg"},
+    "voice_note": {".ogg", ".mp3"},
+    "document": {".pdf"},
+    "sticker": {".webp", ".png"},
+}
+
+
 class FarrosWAGatewayClient:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -182,8 +214,25 @@ class FarrosWAGatewayClient:
         if not path.exists():
             raise GatewayNetworkError(f"File not found: {file_path}")
 
+        if media_type not in GATEWAY_MEDIA_TYPE_MAP:
+            raise GatewayError(f"Tipe media '{media_type}' tidak didukung oleh Gateway.")
+
+        gateway_media_type = GATEWAY_MEDIA_TYPE_MAP[media_type]
+        suffix = path.suffix.lower()
+
+        if suffix not in EXT_MIME_MAP:
+            raise GatewayError(f"Ekstensi file '{suffix}' tidak didukung.")
+
+        allowed_exts = ALLOWED_EXT_PER_GATEWAY_TYPE.get(gateway_media_type, set())
+        if allowed_exts and suffix not in allowed_exts:
+            raise GatewayError(
+                f"Kombinasi tipe media '{gateway_media_type}' dan ekstensi file '{suffix}' tidak cocok."
+            )
+
+        mime_type = EXT_MIME_MAP[suffix]
+
         data: dict[str, Any] = {
-            "type": str(media_type),
+            "type": gateway_media_type,
             "to": str(to),
             "filename": path.name,
             "external_reference": str(external_reference) if external_reference else "",
@@ -193,13 +242,6 @@ class FarrosWAGatewayClient:
 
         if self.session_id:
             data["session_id"] = self.session_id
-
-        # Detect mime
-        mime_type = "video/mp4" if media_type == "video" else "image/jpeg"
-        if path.suffix.lower() == ".png":
-            mime_type = "image/png"
-        elif path.suffix.lower() == ".webp":
-            mime_type = "image/webp"
 
         return await self._execute_request(
             method="POST",

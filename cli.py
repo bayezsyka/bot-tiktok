@@ -13,7 +13,7 @@ from app.auth.service import hash_password
 from app.config import get_settings
 from app.database.connection import AsyncSessionLocal
 from app.database.migrations import run_migrations
-from app.database.models import Admin
+from app.database.models import Admin, utc_now
 from app.database.repositories import (
     AdminRepository,
     AllowedNumberRepository,
@@ -216,15 +216,43 @@ async def retry_job_cmd(args: argparse.Namespace) -> None:
             print(f"❌ Error: Job status is '{job.status}'. Only 'failed' jobs can be retried.", file=sys.stderr)
             sys.exit(1)
 
-        for item in job.items:
-            if item.status == "failed":
-                item.status = "pending"
-                item.error_message = None
+        items = list(job.items) if job.items else []
+        items_with_gw_id = [item for item in items if item.gateway_message_id]
+        if items_with_gw_id:
+            print(
+                f"❌ Error: Job '{args.id}' contains {len(items_with_gw_id)} item(s) already accepted by Gateway "
+                f"(e.g. gateway_message_id='{items_with_gw_id[0].gateway_message_id}'). Cannot perform blind retry.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        for item in items:
+            item.status = "pending"
+            item.error_message = None
+            item.local_filename = None
+            item.gateway_queue_status = None
+            item.gateway_delivery_status = None
+            item.gateway_error_code = None
+            item.gateway_error_message = None
+            item.gateway_accepted_at = None
+            item.gateway_sent_at = None
+            item.gateway_delivered_at = None
+            item.gateway_read_at = None
+            item.gateway_failed_at = None
+            item.pending_since_at = None
+            item.updated_at = utc_now()
 
         job.status = "queued"
         job.error_code = None
         job.error_message = None
         job.attempt_count = 0
+        job.sent_count = 0
+        job.failed_count = 0
+        job.started_at = None
+        job.completed_at = None
+        job.failure_notification_sent_at = None
+        job.updated_at = utc_now()
+
         await session.commit()
         print(f"✅ Job '{args.id}' requeued successfully.")
 
