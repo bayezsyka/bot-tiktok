@@ -24,15 +24,21 @@ TIKTOK_URL_REGEX = re.compile(
 )
 
 INSTAGRAM_URL_REGEX = re.compile(
-    r"https?://(?:www\.|m\.)?instagram\.com/reels?/[A-Za-z0-9_-]+[^\s]*"
+    r"https?://(?:www\.|m\.)?instagram\.com/(?:reels?|p)/[A-Za-z0-9_-]+[^\s]*"
 )
+
+# Instagram shortcode path prefixes and the content hint they map to.
+INSTAGRAM_REEL_PATHS = ("reel", "reels")
+INSTAGRAM_POST_PATHS = ("p",)
+INSTAGRAM_VALID_PATHS = INSTAGRAM_REEL_PATHS + INSTAGRAM_POST_PATHS
+INSTAGRAM_SHORTCODE_REGEX = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 @dataclass
 class ExtractedMediaUrl:
     original_url: str
     platform: str  # 'tiktok' or 'instagram'
-    content_hint: str  # 'video' or 'photo' or 'reel'
+    content_hint: str  # 'video' or 'photo' or 'reel' or 'post'
     canonical_url: str | None = None
 
 
@@ -169,15 +175,19 @@ def check_url_security(url_str: str) -> tuple[bool, str | None]:
         # Platform specific path checks
         path = parsed.path.lower()
         if platform == "instagram":
-            # Instagram path MUST be /reel/{shortcode} or /reels/{shortcode}
+            # Instagram path MUST be /reel/{shortcode}, /reels/{shortcode}, or /p/{shortcode}
             parts = [p for p in path.split("/") if p]
-            if len(parts) < 2 or parts[0] not in ("reel", "reels"):
+            if len(parts) < 2 or parts[0] not in INSTAGRAM_VALID_PATHS:
                 return False, None
             # Reject invalid endpoints
             if any(p in ("accounts", "login", "explore", "direct", "stories", "live") for p in parts):
                 return False, None
             # Reject empty shortcode
-            if not parts[1].strip():
+            shortcode = parts[1].strip()
+            if not shortcode:
+                return False, None
+            # Reject shortcode with characters other than letters, digits, underscore, dash
+            if not INSTAGRAM_SHORTCODE_REGEX.match(shortcode):
                 return False, None
 
         return True, platform
@@ -202,6 +212,18 @@ def sanitize_media_url(url_str: str) -> str:
         return url_str.strip(".,!?;:\"'()[]{}<>")
 
 
+def _instagram_content_hint(clean_url: str) -> str:
+    """Determine Instagram content hint ('reel' or 'post') from URL path."""
+    try:
+        path = urlparse(clean_url).path.lower()
+    except Exception:
+        return "reel"
+    path_parts = [p for p in path.split("/") if p]
+    if path_parts and path_parts[0] in INSTAGRAM_POST_PATHS:
+        return "post"
+    return "reel"
+
+
 def extract_supported_media_url(text: str) -> ExtractedMediaUrl | None:
     """Extract the first valid TikTok or Instagram HTTPS URL from text message."""
     if not text:
@@ -212,7 +234,10 @@ def extract_supported_media_url(text: str) -> ExtractedMediaUrl | None:
         clean_word = sanitize_media_url(word)
         is_safe, platform = check_url_security(clean_word)
         if is_safe and platform:
-            hint = "reel" if platform == "instagram" else "video"
+            if platform == "instagram":
+                hint = _instagram_content_hint(clean_word)
+            else:
+                hint = "video"
             return ExtractedMediaUrl(
                 original_url=clean_word,
                 platform=platform,
@@ -230,7 +255,11 @@ def extract_supported_media_url(text: str) -> ExtractedMediaUrl | None:
         clean_match = sanitize_media_url(match)
         is_safe, platform = check_url_security(clean_match)
         if is_safe and platform == "instagram":
-            return ExtractedMediaUrl(original_url=clean_match, platform="instagram", content_hint="reel")
+            return ExtractedMediaUrl(
+                original_url=clean_match,
+                platform="instagram",
+                content_hint=_instagram_content_hint(clean_match),
+            )
 
     return None
 

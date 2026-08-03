@@ -513,6 +513,7 @@ class QueueWorker:
             platform = getattr(job, "platform", "tiktok") or "tiktok"
             sender_number = job.sender_number
             inbound_message_id = job.inbound_message_id
+            canonical_url = job.canonical_url or job.original_url or ""
 
             if total_items == 0:
                 logger.error(f"[Stage: Sending] Job {job_id} has total_items == 0.")
@@ -559,7 +560,13 @@ class QueueWorker:
             # Determine caption and idempotency key based on platform
             caption = ""
             if platform == "instagram":
-                idemp_key = f"instagram-{inbound_message_id}-video"
+                # Instagram /p/ posts use per-item idempotency keys (photo/video + position).
+                # Instagram /reel/ or /reels/ use a single video key.
+                ig_path = canonical_url.lower()
+                if "/p/" in ig_path:
+                    idemp_key = f"instagram-{inbound_message_id}-{snap['media_type']}-{snap['position']:03d}"
+                else:
+                    idemp_key = f"instagram-{inbound_message_id}-video"
             elif snap["media_type"] == "video":
                 idemp_key = f"tiktok-{inbound_message_id}-video"
             else:

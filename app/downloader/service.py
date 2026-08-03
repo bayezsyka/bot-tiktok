@@ -10,13 +10,14 @@ from app.downloader.dtos import (
     JobDownloadSnapshot,
 )
 from app.downloader.exceptions import ContentNotSupportedError, DownloadError
+from app.downloader.gallery_dl_instagram_post_provider import GalleryDlInstagramPostProvider
 from app.downloader.gallery_dl_tiktok_photo_provider import GalleryDlTikTokPhotoProvider
 from app.downloader.instagram_provider import InstagramReelProvider
 from app.downloader.metadata import MediaContentMetadata
 from app.downloader.providers import DownloaderProvider
 from app.downloader.tiktok_photo_provider import TikTokPhotoProvider
 from app.downloader.yt_dlp_provider import YtDlpProvider
-from app.security.urls import check_url_security, resolve_canonical_tiktok_url
+from app.security.urls import INSTAGRAM_POST_PATHS, check_url_security, resolve_canonical_tiktok_url
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,18 @@ class DownloaderService:
         self.gallery_dl = GalleryDlTikTokPhotoProvider()
         self.photo_provider = TikTokPhotoProvider()
         self.ig_provider = InstagramReelProvider()
+        self.ig_post_provider = GalleryDlInstagramPostProvider()
+
+    @staticmethod
+    def _instagram_path_kind(canonical_url: str) -> str:
+        """Return 'post' for /p/, 'reel' for /reel/ or /reels/, '' otherwise."""
+        path = urlsplit(canonical_url).path.lower()
+        parts = [p for p in path.split("/") if p]
+        if parts and parts[0] in INSTAGRAM_POST_PATHS:
+            return "post"
+        if parts and parts[0] in ("reel", "reels"):
+            return "reel"
+        return ""
 
     @staticmethod
     def _canonical_type(canonical_url: str) -> str | None:
@@ -80,12 +93,27 @@ class DownloaderService:
         metadata: MediaContentMetadata | None = None
 
         if platform == "instagram":
-            provider = self.ig_provider
-            metadata = await self.ig_provider.extract_metadata(canonical_url, job_dir)
-            if not metadata or not metadata.items:
+            ig_kind = self._instagram_path_kind(canonical_url)
+            if ig_kind == "post":
+                provider = self.ig_post_provider
+                metadata = await self.ig_post_provider.extract_metadata(canonical_url, job_dir)
+                if not metadata or not metadata.items:
+                    raise DownloadError(
+                        "Link Instagram Post tidak dapat diproses.",
+                        user_friendly_message="konten Instagram tidak dapat diakses. pastikan kontennya bersifat publik.",
+                    )
+            elif ig_kind == "reel":
+                provider = self.ig_provider
+                metadata = await self.ig_provider.extract_metadata(canonical_url, job_dir)
+                if not metadata or not metadata.items:
+                    raise DownloadError(
+                        "Link Instagram Reels tidak dapat diproses.",
+                        user_friendly_message="reels instagram tidak dapat diakses. pastikan akun dan kontennya bersifat publik.",
+                    )
+            else:
                 raise DownloadError(
-                    "Link Instagram Reels tidak dapat diproses.",
-                    user_friendly_message="reels instagram tidak dapat diakses. pastikan akun dan kontennya bersifat publik.",
+                    "Link Instagram tidak dikenali sebagai Reel maupun Post.",
+                    user_friendly_message="Link Instagram tidak dapat diproses.",
                 )
         else:
             # TikTok platform
