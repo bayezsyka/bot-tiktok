@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     FFMPEG_BINARY: str = "ffmpeg"
     FFPROBE_BINARY: str = "ffprobe"
     TIKTOK_COOKIES_FILE: str = ""
+    TIKTOK_PROXY_URL: str = ""
     INSTAGRAM_COOKIES_FILE: str = ""
 
     MAX_MEDIA_MB: int = 15

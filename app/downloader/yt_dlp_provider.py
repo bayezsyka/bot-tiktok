@@ -39,6 +39,8 @@ class YtDlpProvider(DownloaderProvider):
 
     def _get_base_args(self) -> list[str]:
         args = [self.settings.YT_DLP_BINARY, "--no-playlist", "--no-warnings"]
+        if self.settings.TIKTOK_PROXY_URL:
+            args.extend(["--proxy", self.settings.TIKTOK_PROXY_URL])
         cookies_file = self.settings.TIKTOK_COOKIES_FILE
         if cookies_file and os.path.exists(cookies_file) and os.path.isfile(cookies_file):
             args.extend(["--cookies", cookies_file])
@@ -57,6 +59,10 @@ class YtDlpProvider(DownloaderProvider):
                 query_items = parse_qsl(parsed.query, keep_blank_values=True)
             except ValueError:
                 return "[REDACTED_URL]" + suffix
+
+            # Redact user/pass if present in URL
+            if parsed.username or parsed.password:
+                return "[REDACTED_PROXY_URL]" + suffix
 
             has_sensitive_query = any(key.lower() in {k.lower() for k in _SENSITIVE_QUERY_KEYS} for key, _ in query_items)
             if parsed.query and any(marker in parsed.netloc.lower() for marker in _SIGNED_MEDIA_HOST_MARKERS):
@@ -91,6 +97,11 @@ class YtDlpProvider(DownloaderProvider):
         )
         sanitized = re.sub(
             r"(?i)(cookie\s*:\s*)(?!needed\b)[^\n]+",
+            r"\1[REDACTED]",
+            sanitized,
+        )
+        sanitized = re.sub(
+            r"(?i)(--proxy\s+)[^\s]+",
             r"\1[REDACTED]",
             sanitized,
         )

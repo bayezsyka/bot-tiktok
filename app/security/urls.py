@@ -272,7 +272,9 @@ def extract_tiktok_url(text: str) -> str | None:
     return None
 
 
-async def resolve_canonical_media_url(url_str: str, max_redirects: int = 5) -> str | None:
+async def resolve_canonical_media_url(
+    url_str: str, max_redirects: int = 5, proxy: str | None = None
+) -> str | None:
     """
     Follow redirects safely to obtain canonical media URL.
     Verifies target redirect URL against SSRF and allowlist.
@@ -287,7 +289,12 @@ async def resolve_canonical_media_url(url_str: str, max_redirects: int = 5) -> s
     if platform == "instagram":
         return current_url
 
-    async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+    if proxy is None and platform == "tiktok":
+        from app.config import get_settings
+
+        proxy = get_settings().TIKTOK_PROXY_URL or None
+
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=False, proxy=proxy or None) as client:
         for _ in range(max_redirects):
             try:
                 response = await client.head(
@@ -317,6 +324,8 @@ async def resolve_canonical_media_url(url_str: str, max_redirects: int = 5) -> s
     return current_url if safe_end else None
 
 
-async def resolve_canonical_tiktok_url(url_str: str, max_redirects: int = 5) -> str | None:
+async def resolve_canonical_tiktok_url(
+    url_str: str, max_redirects: int = 5, proxy: str | None = None
+) -> str | None:
     """Backward compatibility alias for resolve_canonical_media_url."""
-    return await resolve_canonical_media_url(url_str, max_redirects=max_redirects)
+    return await resolve_canonical_media_url(url_str, max_redirects=max_redirects, proxy=proxy)

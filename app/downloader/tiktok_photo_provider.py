@@ -347,11 +347,20 @@ def parse_tiktok_photo_post_html(html_content: str, canonical_url: str) -> TikTo
     return None
 
 
+def _sanitize_error_message(err_text: str) -> str:
+    if not err_text:
+        return ""
+    sanitized = re.sub(r"(?i)https?://[^:@\s/]+:[^@\s/]+@[^\s<>\"']+", "[REDACTED_PROXY]", err_text)
+    sanitized = re.sub(r"(?i)(--proxy\s+)[^\s]+", r"\1[REDACTED]", sanitized)
+    return sanitized
+
+
 class TikTokPhotoProvider(DownloaderProvider):
     def __init__(self) -> None:
         self.settings = get_settings()
 
     async def _fetch_html(self, url: str, cookies: httpx.Cookies | None = None) -> str:
+        proxy = self.settings.TIKTOK_PROXY_URL or None
         try:
             async with httpx.AsyncClient(
                 timeout=15.0,
@@ -359,12 +368,13 @@ class TikTokPhotoProvider(DownloaderProvider):
                 headers=DEFAULT_TIKTOK_HEADERS,
                 cookies=cookies,
                 verify=True,
+                proxy=proxy,
             ) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
                 return resp.text
         except Exception as e:
-            logger.warning(f"Failed to fetch canonical TikTok HTML: {e}")
+            logger.warning(f"Failed to fetch canonical TikTok HTML: {_sanitize_error_message(str(e))}")
             return ""
 
     async def _fetch_fallback_item_detail(
@@ -383,9 +393,10 @@ class TikTokPhotoProvider(DownloaderProvider):
             **DEFAULT_TIKTOK_HEADERS,
             "Accept": "application/json, text/plain, */*",
         }
+        proxy = self.settings.TIKTOK_PROXY_URL or None
 
         async with httpx.AsyncClient(
-            timeout=15.0, follow_redirects=True, cookies=cookies, verify=True
+            timeout=15.0, follow_redirects=True, cookies=cookies, verify=True, proxy=proxy
         ) as client:
             for ep in endpoints:
                 try:
@@ -450,7 +461,7 @@ class TikTokPhotoProvider(DownloaderProvider):
                         items=items,
                     )
                 except Exception as e:
-                    logger.debug(f"Fallback endpoint {ep} failed: {e}")
+                    logger.debug(f"Fallback endpoint {ep} failed: {_sanitize_error_message(str(e))}")
                     continue
 
         return None
@@ -464,6 +475,7 @@ class TikTokPhotoProvider(DownloaderProvider):
         cookies_file = self.settings.TIKTOK_COOKIES_FILE
         cookies = _load_netscape_cookies(cookies_file)
         cookie_configured = bool(cookies is not None)
+        proxy_configured = bool(self.settings.TIKTOK_PROXY_URL)
 
         html_content = await self._fetch_html(canonical_url, cookies=cookies)
         metadata = parse_tiktok_photo_post_html(html_content, canonical_url) if html_content else None
@@ -480,7 +492,7 @@ class TikTokPhotoProvider(DownloaderProvider):
             elif challenge_detected:
                 logger.warning(
                     f"TikTok challenge detected: platform=tiktok content_type=photo item_id={item_id} "
-                    f"extraction_strategy=failed cookie_configured={cookie_configured} challenge_detected=true slide_count=0"
+                    f"extraction_strategy=failed cookie_configured={cookie_configured} proxy_configured={proxy_configured} challenge_detected=true slide_count=0"
                 )
                 raise TikTokChallengeError(
                     message=f"TikTok challenge page encountered for item {item_id}",
@@ -490,7 +502,7 @@ class TikTokPhotoProvider(DownloaderProvider):
         slide_count = len(metadata.items) if metadata else 0
         logger.info(
             f"TikTok photo extraction completed: platform=tiktok content_type=photo item_id={item_id} "
-            f"extraction_strategy={strategy} cookie_configured={cookie_configured} challenge_detected={challenge_detected} slide_count={slide_count}"
+            f"extraction_strategy={strategy} cookie_configured={cookie_configured} proxy_configured={proxy_configured} challenge_detected={challenge_detected} slide_count={slide_count}"
         )
         return metadata
 
@@ -508,9 +520,10 @@ class TikTokPhotoProvider(DownloaderProvider):
 
         total_slideshow_bytes = 0
         max_bytes = self.settings.MAX_SOURCE_DOWNLOAD_MB * 1024 * 1024
+        proxy = self.settings.TIKTOK_PROXY_URL or None
 
         async with httpx.AsyncClient(
-            timeout=30.0, follow_redirects=True, headers=headers, cookies=cookies, verify=True
+            timeout=30.0, follow_redirects=True, headers=headers, cookies=cookies, verify=True, proxy=proxy
         ) as client:
             for item in metadata.items:
                 try:
@@ -519,8 +532,9 @@ class TikTokPhotoProvider(DownloaderProvider):
                     content = resp.content
                 except Exception as e:
                     self._cleanup_downloaded_photos(job_dir)
+                    sanitized_err = _sanitize_error_message(str(e))
                     raise DownloadError(
-                        f"Gagal mengunduh foto slide #{item.position}: {e}",
+                        f"Gagal mengunduh foto slide #{item.position}: {sanitized_err}",
                         user_friendly_message="Gagal mengunduh file media. Pengunduhan slide foto terganggu.",
                     ) from e
 

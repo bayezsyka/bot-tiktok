@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -31,17 +32,20 @@ logger = logging.getLogger(__name__)
 
 
 def sanitize_stderr(stderr_text: str) -> str:
-    """Sanitize subprocess stderr to remove sensitive cookies, file paths, or signature tokens."""
+    """Sanitize subprocess stderr to remove sensitive cookies, file paths, proxy credentials, or signature tokens."""
     if not stderr_text:
         return ""
     lines = stderr_text.strip().split("\n")
     clean_lines = []
     for line in lines:
-        if "cookie" in line.lower() or "/" in line or "\\" in line:
-            # Skip lines exposing internal paths or cookie info
+        if "cookie" in line.lower() or "/" in line or "\\" in line or "@" in line:
+            # Skip lines exposing internal paths, cookie info, or credentials
             continue
         clean_lines.append(line.strip())
-    return " - ".join(clean_lines[:2]) or "gallery-dl execution error"
+    clean_message = " - ".join(clean_lines[:2]) or "gallery-dl execution error"
+    clean_message = re.sub(r"(?i)https?://[^:@\s/]+:[^@\s/]+@[^\s<>\"']+", "[REDACTED_PROXY]", clean_message)
+    clean_message = re.sub(r"(?i)(--proxy\s+)[^\s]+", r"\1[REDACTED]", clean_message)
+    return clean_message
 
 
 def _is_valid_slide_url(url: str) -> bool:
@@ -189,6 +193,8 @@ class GalleryDlTikTokPhotoProvider(DownloaderProvider):
             "-o",
             "extractor.tiktok.covers=false",
         ]
+        if self.settings.TIKTOK_PROXY_URL:
+            args.extend(["--proxy", self.settings.TIKTOK_PROXY_URL])
         if cookie_configured:
             args.extend(["--cookies", cookies_file])
         args.append(canonical_url)
@@ -264,10 +270,12 @@ class GalleryDlTikTokPhotoProvider(DownloaderProvider):
         except (TypeError, ValueError):
             metadata_entries = 0
 
+        proxy_configured = bool(self.settings.TIKTOK_PROXY_URL)
+
         if not metadata or not metadata.items:
             logger.warning(
                 f"TikTok photo extraction empty: platform=tiktok provider=gallery-dl result=empty "
-                f"item_id={item_id} cookie_configured={cookie_configured} exit_code={exit_code} "
+                f"item_id={item_id} cookie_configured={cookie_configured} proxy_configured={proxy_configured} exit_code={exit_code} "
                 f"metadata_entries={metadata_entries} slide_count=0 "
                 f"challenge_detected={challenge_detected} elapsed_seconds={elapsed_sec:.2f}"
             )
@@ -280,7 +288,7 @@ class GalleryDlTikTokPhotoProvider(DownloaderProvider):
 
         logger.info(
             f"TikTok photo extraction completed: platform=tiktok content_type=photo provider=gallery-dl result=success "
-            f"item_id={item_id} cookie_configured={cookie_configured} exit_code={exit_code} "
+            f"item_id={item_id} cookie_configured={cookie_configured} proxy_configured={proxy_configured} exit_code={exit_code} "
             f"metadata_entries={metadata_entries} slide_count={slide_count} "
             f"challenge_detected={challenge_detected} elapsed_seconds={elapsed_sec:.2f}"
         )
@@ -301,9 +309,15 @@ class GalleryDlTikTokPhotoProvider(DownloaderProvider):
 
         total_slideshow_bytes = 0
         max_bytes = self.settings.MAX_SOURCE_DOWNLOAD_MB * 1024 * 1024
+        proxy = self.settings.TIKTOK_PROXY_URL or None
 
         async with httpx.AsyncClient(
-            timeout=30.0, follow_redirects=True, headers=headers, cookies=cookies, verify=True
+            timeout=30.0,
+            follow_redirects=True,
+            headers=headers,
+            cookies=cookies,
+            verify=True,
+            proxy=proxy,
         ) as client:
             for item in metadata.items:
                 try:
@@ -312,8 +326,9 @@ class GalleryDlTikTokPhotoProvider(DownloaderProvider):
                     content = resp.content
                 except Exception as e:
                     self._cleanup_downloaded_photos(job_dir)
+                    sanitized_err = sanitize_stderr(str(e)) or "Pengunduhan slide foto terganggu."
                     raise DownloadError(
-                        f"Gagal mengunduh foto slide #{item.position}: {e}",
+                        f"Gagal mengunduh foto slide #{item.position}: {sanitized_err}",
                         user_friendly_message="Gagal mengunduh file media. Pengunduhan slide foto terganggu.",
                     ) from e
 

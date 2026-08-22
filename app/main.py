@@ -65,6 +65,7 @@ async def health_check() -> JSONResponse:
     yt_dlp_status = "available" if shutil.which(settings.YT_DLP_BINARY) else "missing"
     gallery_dl_status = "available" if shutil.which(settings.GALLERY_DL_BINARY) else "missing"
     ffmpeg_status = "available" if shutil.which(settings.FFMPEG_BINARY) else "missing"
+    tiktok_proxy_status = "configured" if settings.TIKTOK_PROXY_URL else "direct"
 
     return JSONResponse(
         content={
@@ -76,6 +77,7 @@ async def health_check() -> JSONResponse:
             "yt_dlp": yt_dlp_status,
             "gallery_dl": gallery_dl_status,
             "ffmpeg": ffmpeg_status,
+            "tiktok_proxy": tiktok_proxy_status,
             "timestamp": datetime.now(UTC).isoformat(),
         }
     )
