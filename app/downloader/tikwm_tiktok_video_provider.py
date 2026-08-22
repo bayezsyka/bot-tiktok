@@ -187,28 +187,47 @@ class TikwmTikTokVideoProvider(DownloaderProvider):
                 verify=True,
                 proxy=proxy,
             ) as client:
-                resp = await client.get(metadata.items[0].source_url)
-                resp.raise_for_status()
+                async with client.stream("GET", metadata.items[0].source_url) as resp:
+                    resp.raise_for_status()
 
-                content_type = resp.headers.get("content-type", "").lower()
-                if "text/html" in content_type or "application/json" in content_type:
-                    raise DownloadError("Server TikWM mengembalikan response non-video.")
+                    content_type = resp.headers.get("content-type", "").lower()
+                    if "text/html" in content_type or "application/json" in content_type:
+                        raise DownloadError("Server TikWM mengembalikan response non-video.")
 
-                content = resp.content
-                if len(content) > max_bytes:
-                    raise DownloadSizeLimitExceededError(
-                        "Ukuran video TikWM melebihi batas maksimal.",
-                        user_friendly_message="Ukuran video asli melebihi batas maksimal unduhan.",
-                    )
+                    content_length_str = resp.headers.get("content-length")
+                    if content_length_str and content_length_str.isdigit():
+                        if int(content_length_str) > max_bytes:
+                            raise DownloadSizeLimitExceededError(
+                                "Ukuran video TikWM melebihi batas maksimal.",
+                                user_friendly_message="Ukuran video asli melebihi batas maksimal unduhan.",
+                            )
 
-                if len(content) == 0:
-                    raise DownloadError("File video hasil unduhan kosong atau tidak ditemukan.")
+                    total_streamed = 0
+                    first_chunk = True
+                    with open(output_file, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=65536):
+                            if not chunk:
+                                continue
+                            if first_chunk:
+                                first_chunk = False
+                                header = chunk[:64].lstrip()
+                                if header.startswith(
+                                    (b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML", b"{\"", b"{'")
+                                ):
+                                    raise DownloadError(
+                                        "File video hasil unduhan bukan stream video yang valid."
+                                    )
+                            total_streamed += len(chunk)
+                            if total_streamed > max_bytes:
+                                raise DownloadSizeLimitExceededError(
+                                    "Ukuran video TikWM melebihi batas maksimal.",
+                                    user_friendly_message="Ukuran video asli melebihi batas maksimal unduhan.",
+                                )
+                            f.write(chunk)
 
-                if content.startswith(b"<!DOCTYPE") or content.startswith(b"<html") or content.startswith(b"{\""):
-                    raise DownloadError("File video hasil unduhan bukan stream video yang valid.")
+                    if total_streamed == 0:
+                        raise DownloadError("File video hasil unduhan kosong atau tidak ditemukan.")
 
-                with open(output_file, "wb") as f:
-                    f.write(content)
         except (DownloadError, DownloadSizeLimitExceededError):
             self._cleanup_downloaded_videos(job_dir)
             raise
@@ -223,13 +242,6 @@ class TikwmTikTokVideoProvider(DownloaderProvider):
         if not output_file.exists() or output_file.stat().st_size == 0:
             self._cleanup_downloaded_videos(job_dir)
             raise DownloadError("File video hasil unduhan kosong atau tidak ditemukan.")
-
-        # Basic validation: ensure it's not an HTML or JSON error document
-        with open(output_file, "rb") as f:
-            header = f.read(32)
-        if header.startswith(b"<!DOCTYPE") or header.startswith(b"<html") or header.startswith(b"{\""):
-            self._cleanup_downloaded_videos(job_dir)
-            raise DownloadError("File video hasil unduhan bukan stream video yang valid.")
 
         metadata.items[0].local_path = str(output_file.resolve())
         return metadata

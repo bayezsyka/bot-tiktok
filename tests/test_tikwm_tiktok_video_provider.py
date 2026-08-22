@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from app.downloader.dtos import JobDownloadSnapshot
-from app.downloader.exceptions import DownloadError
+from app.downloader.exceptions import DownloadError, DownloadSizeLimitExceededError
 from app.downloader.metadata import MediaContentMetadata, MediaItemMetadata
 from app.downloader.service import DownloaderService
 from app.downloader.tikwm_tiktok_video_provider import TikwmTikTokVideoProvider
@@ -144,6 +144,32 @@ async def test_tikwm_video_missing_url(tmp_path: Path) -> None:
         assert metadata is None
 
 
+class MockStreamResponse:
+    def __init__(
+        self,
+        chunks: list[bytes],
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.chunks = chunks
+        self.status_code = status_code
+        self.headers = headers or {"content-type": "video/mp4"}
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise DownloadError(f"HTTP {self.status_code}")
+
+    async def aiter_bytes(self, chunk_size: int = 65536):
+        for chunk in self.chunks:
+            yield chunk
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+
 @pytest.mark.asyncio
 async def test_tikwm_video_download_success(tmp_path: Path) -> None:
     provider = TikwmTikTokVideoProvider()
@@ -163,18 +189,10 @@ async def test_tikwm_video_download_success(tmp_path: Path) -> None:
 
     fake_video_bytes = b"\x00\x00\x00\x1cftypisom\x00\x00\x02\x00isomiso2mp41" + b"\x00" * 500
 
-    class MockResponse:
-        def __init__(self) -> None:
-            self.headers = {"content-type": "video/mp4"}
-            self.content = fake_video_bytes
-
-        def raise_for_status(self) -> None:
-            pass
-
     with patch("httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_client.get.return_value = MockResponse()
+        mock_client.stream = MagicMock(return_value=MockStreamResponse([fake_video_bytes]))
 
         result = await provider.download_content(
             "https://www.tiktok.com/@user/video/123", metadata, tmp_path
@@ -188,7 +206,7 @@ async def test_tikwm_video_download_success(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tikwm_video_download_rejects_html_response(tmp_path: Path) -> None:
+async def test_tikwm_video_download_content_length_limit_exceeded(tmp_path: Path) -> None:
     provider = TikwmTikTokVideoProvider()
     metadata = MediaContentMetadata(
         content_type="video",
@@ -204,18 +222,92 @@ async def test_tikwm_video_download_rejects_html_response(tmp_path: Path) -> Non
         ],
     )
 
-    class MockResponse:
-        def __init__(self) -> None:
-            self.headers = {"content-type": "text/html"}
-            self.content = b"<!DOCTYPE html><html><body>Error page</body></html>"
-
-        def raise_for_status(self) -> None:
-            pass
+    max_bytes = provider.settings.MAX_SOURCE_DOWNLOAD_MB * 1024 * 1024
+    oversized_length = str(max_bytes + 1024)
 
     with patch("httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
         mock_client_cls.return_value.__aenter__.return_value = mock_client
-        mock_client.get.return_value = MockResponse()
+        mock_client.stream = MagicMock(
+            return_value=MockStreamResponse(
+                chunks=[],
+                headers={"content-type": "video/mp4", "content-length": oversized_length},
+            )
+        )
+
+        with pytest.raises(DownloadSizeLimitExceededError):
+            await provider.download_content(
+                "https://www.tiktok.com/@user/video/123", metadata, tmp_path
+            )
+
+        assert list(tmp_path.glob("video_source*")) == []
+
+
+@pytest.mark.asyncio
+async def test_tikwm_video_download_stream_size_limit_exceeded(tmp_path: Path) -> None:
+    provider = TikwmTikTokVideoProvider()
+    metadata = MediaContentMetadata(
+        content_type="video",
+        title="Test Video",
+        author="Tester",
+        duration_seconds=10,
+        items=[
+            MediaItemMetadata(
+                position=1,
+                source_url="https://www.tikwm.com/video/media/play/123.mp4",
+                media_type="video",
+            )
+        ],
+    )
+
+    chunk_1 = b"\x00\x00\x00\x1cftypisom" + b"\x00" * 100
+    # Simulate a chunk that pushes total streamed over the limit
+    oversized_chunk = b"\x00" * (provider.settings.MAX_SOURCE_DOWNLOAD_MB * 1024 * 1024 + 1024)
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.stream = MagicMock(
+            return_value=MockStreamResponse(
+                chunks=[chunk_1, oversized_chunk],
+                headers={"content-type": "video/mp4"},
+            )
+        )
+
+        with pytest.raises(DownloadSizeLimitExceededError):
+            await provider.download_content(
+                "https://www.tiktok.com/@user/video/123", metadata, tmp_path
+            )
+
+        assert list(tmp_path.glob("video_source*")) == []
+
+
+@pytest.mark.asyncio
+async def test_tikwm_video_download_rejects_html_content_type(tmp_path: Path) -> None:
+    provider = TikwmTikTokVideoProvider()
+    metadata = MediaContentMetadata(
+        content_type="video",
+        title="Test Video",
+        author="Tester",
+        duration_seconds=10,
+        items=[
+            MediaItemMetadata(
+                position=1,
+                source_url="https://www.tikwm.com/video/media/play/123.mp4",
+                media_type="video",
+            )
+        ],
+    )
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        mock_client.stream = MagicMock(
+            return_value=MockStreamResponse(
+                chunks=[b"<!DOCTYPE html><html><body>Error page</body></html>"],
+                headers={"content-type": "text/html"},
+            )
+        )
 
         with pytest.raises(DownloadError) as exc_info:
             await provider.download_content(
@@ -223,6 +315,43 @@ async def test_tikwm_video_download_rejects_html_response(tmp_path: Path) -> Non
             )
 
         assert "Server TikWM mengembalikan response non-video" in str(exc_info.value)
+        assert list(tmp_path.glob("video_source*")) == []
+
+
+@pytest.mark.asyncio
+async def test_tikwm_video_download_rejects_html_body_header(tmp_path: Path) -> None:
+    provider = TikwmTikTokVideoProvider()
+    metadata = MediaContentMetadata(
+        content_type="video",
+        title="Test Video",
+        author="Tester",
+        duration_seconds=10,
+        items=[
+            MediaItemMetadata(
+                position=1,
+                source_url="https://www.tikwm.com/video/media/play/123.mp4",
+                media_type="video",
+            )
+        ],
+    )
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__.return_value = mock_client
+        # Server returned video/mp4 header but HTML body
+        mock_client.stream = MagicMock(
+            return_value=MockStreamResponse(
+                chunks=[b"<!DOCTYPE html><html><body>Error</body></html>"],
+                headers={"content-type": "video/mp4"},
+            )
+        )
+
+        with pytest.raises(DownloadError) as exc_info:
+            await provider.download_content(
+                "https://www.tiktok.com/@user/video/123", metadata, tmp_path
+            )
+
+        assert "File video hasil unduhan bukan stream video yang valid" in str(exc_info.value)
         assert list(tmp_path.glob("video_source*")) == []
 
 
