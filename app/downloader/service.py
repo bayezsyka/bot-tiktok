@@ -17,6 +17,7 @@ from app.downloader.metadata import MediaContentMetadata
 from app.downloader.providers import DownloaderProvider
 from app.downloader.tiktok_photo_provider import TikTokPhotoProvider
 from app.downloader.tikwm_tiktok_photo_provider import TikwmTikTokPhotoProvider
+from app.downloader.tikwm_tiktok_video_provider import TikwmTikTokVideoProvider
 from app.downloader.yt_dlp_provider import YtDlpProvider
 from app.security.urls import INSTAGRAM_POST_PATHS, check_url_security, resolve_canonical_tiktok_url
 
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 class DownloaderService:
     def __init__(self) -> None:
         self.yt_dlp = YtDlpProvider()
+        self.tikwm_video_provider = TikwmTikTokVideoProvider()
         self.gallery_dl = GalleryDlTikTokPhotoProvider()
         self.photo_provider = TikTokPhotoProvider()
         self.tikwm_provider = TikwmTikTokPhotoProvider()
@@ -152,10 +154,26 @@ class DownloaderService:
                 if (not metadata or not metadata.items) and gallery_empty_error:
                     raise gallery_empty_error
             elif canonical_type == "video":
-                # A classified video is terminally owned by yt-dlp. Photo providers must not mask it.
-                metadata = await self.yt_dlp.extract_metadata(canonical_url, job_dir)
+                # Primary for /video/: yt-dlp
                 provider = self.yt_dlp
+                yt_error: Exception | None = None
+                try:
+                    metadata = await self.yt_dlp.extract_metadata(canonical_url, job_dir)
+                except Exception as exc:
+                    yt_error = exc
+
+                # Fallback to TikWM video provider if yt-dlp failed or returned no usable items
                 if not metadata or not metadata.items:
+                    try:
+                        metadata = await self.tikwm_video_provider.extract_metadata(canonical_url, job_dir)
+                        if metadata and metadata.items:
+                            provider = self.tikwm_video_provider
+                    except Exception as exc:
+                        logger.warning(f"TikWM video fallback failed for {canonical_url}: {exc}")
+
+                if not metadata or not metadata.items:
+                    if yt_error:
+                        raise yt_error
                     raise DownloadError(
                         "yt-dlp tidak menghasilkan metadata untuk canonical URL /video/.",
                         user_friendly_message="Video TikTok sementara tidak dapat diproses. Silakan coba kembali.",
@@ -183,6 +201,13 @@ class DownloaderService:
                         metadata = await self.tikwm_provider.extract_metadata(canonical_url, job_dir)
                         if metadata:
                             provider = self.tikwm_provider
+                    except Exception:
+                        metadata = None
+                if not metadata:
+                    try:
+                        metadata = await self.tikwm_video_provider.extract_metadata(canonical_url, job_dir)
+                        if metadata:
+                            provider = self.tikwm_video_provider
                     except Exception:
                         metadata = None
 

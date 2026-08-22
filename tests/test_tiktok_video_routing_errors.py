@@ -72,6 +72,12 @@ async def test_canonical_video_ytdlp_failure_never_calls_photo_providers(tmp_pat
             side_effect=original_error,
         ) as mock_ytdlp,
         patch.object(
+            downloader.tikwm_video_provider,
+            "extract_metadata",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_tikwm_video,
+        patch.object(
             downloader.gallery_dl, "extract_metadata", new_callable=AsyncMock
         ) as mock_gallery,
         patch.object(
@@ -91,6 +97,7 @@ async def test_canonical_video_ytdlp_failure_never_calls_photo_providers(tmp_pat
 
     assert exc_info.value is original_error
     mock_ytdlp.assert_awaited_once()
+    mock_tikwm_video.assert_awaited_once()
     mock_gallery.assert_not_awaited()
     mock_html.assert_not_awaited()
 
@@ -332,6 +339,11 @@ async def test_video_network_error_enters_worker_retry(test_db: AsyncSession) ->
             new_callable=AsyncMock,
             side_effect=DownloadError("Network timeout while contacting TikTok"),
         ),
+        patch(
+            "app.downloader.service.TikwmTikTokVideoProvider.extract_metadata",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
         patch("app.queue.worker.asyncio.sleep", new_callable=AsyncMock),
     ):
         await worker._process_job_safely(job_id)
@@ -383,6 +395,11 @@ async def test_canonical_is_saved_and_rendered_when_extraction_fails(
             "app.downloader.service.YtDlpProvider.extract_metadata",
             new_callable=AsyncMock,
             side_effect=fail_after_canonical_is_committed,
+        ),
+        patch(
+            "app.downloader.service.TikwmTikTokVideoProvider.extract_metadata",
+            new_callable=AsyncMock,
+            return_value=None,
         ),
         patch.object(worker, "_send_failure_notification", new_callable=AsyncMock),
     ):
