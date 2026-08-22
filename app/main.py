@@ -66,6 +66,7 @@ async def health_check() -> JSONResponse:
     gallery_dl_status = "available" if shutil.which(settings.GALLERY_DL_BINARY) else "missing"
     ffmpeg_status = "available" if shutil.which(settings.FFMPEG_BINARY) else "missing"
     tiktok_proxy_status = "configured" if settings.TIKTOK_PROXY_URL else "direct"
+    tikwm_status = "configured" if getattr(settings, "TIKWM_API_URL", "") else "disabled"
 
     return JSONResponse(
         content={
@@ -78,6 +79,7 @@ async def health_check() -> JSONResponse:
             "gallery_dl": gallery_dl_status,
             "ffmpeg": ffmpeg_status,
             "tiktok_proxy": tiktok_proxy_status,
+            "tikwm": tikwm_status,
             "timestamp": datetime.now(UTC).isoformat(),
         }
     )

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     FFPROBE_BINARY: str = "ffprobe"
     TIKTOK_COOKIES_FILE: str = ""
     TIKTOK_PROXY_URL: str = ""
+    TIKWM_API_URL: str = "https://www.tikwm.com/api/"
     INSTAGRAM_COOKIES_FILE: str = ""
 
     MAX_MEDIA_MB: int = 15

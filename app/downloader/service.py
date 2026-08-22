@@ -9,13 +9,14 @@ from app.downloader.dtos import (
     ExtractedMetadataResult,
     JobDownloadSnapshot,
 )
-from app.downloader.exceptions import ContentNotSupportedError, DownloadError
+from app.downloader.exceptions import DownloadError
 from app.downloader.gallery_dl_instagram_post_provider import GalleryDlInstagramPostProvider
 from app.downloader.gallery_dl_tiktok_photo_provider import GalleryDlTikTokPhotoProvider
 from app.downloader.instagram_provider import InstagramReelProvider
 from app.downloader.metadata import MediaContentMetadata
 from app.downloader.providers import DownloaderProvider
 from app.downloader.tiktok_photo_provider import TikTokPhotoProvider
+from app.downloader.tikwm_tiktok_photo_provider import TikwmTikTokPhotoProvider
 from app.downloader.yt_dlp_provider import YtDlpProvider
 from app.security.urls import INSTAGRAM_POST_PATHS, check_url_security, resolve_canonical_tiktok_url
 
@@ -27,6 +28,7 @@ class DownloaderService:
         self.yt_dlp = YtDlpProvider()
         self.gallery_dl = GalleryDlTikTokPhotoProvider()
         self.photo_provider = TikTokPhotoProvider()
+        self.tikwm_provider = TikwmTikTokPhotoProvider()
         self.ig_provider = InstagramReelProvider()
         self.ig_post_provider = GalleryDlInstagramPostProvider()
 
@@ -122,16 +124,30 @@ class DownloaderService:
             if canonical_type == "photo":
                 # Primary for /photo/: gallery-dl
                 provider = self.gallery_dl
-                gallery_empty_error: ContentNotSupportedError | None = None
+                gallery_empty_error: Exception | None = None
                 try:
                     metadata = await self.gallery_dl.extract_metadata(canonical_url, job_dir)
-                except ContentNotSupportedError as exc:
+                except Exception as exc:
                     gallery_empty_error = exc
 
-                # Fallback to HTML parser if gallery-dl returned no slides.
+                # Fallback to HTML parser if gallery-dl returned no slides or hit a challenge
                 if not metadata:
-                    metadata = await self.photo_provider.extract_metadata(canonical_url, job_dir)
-                    provider = self.photo_provider
+                    try:
+                        metadata = await self.photo_provider.extract_metadata(canonical_url, job_dir)
+                        if metadata:
+                            provider = self.photo_provider
+                    except Exception as exc:
+                        if not gallery_empty_error:
+                            gallery_empty_error = exc
+
+                # Fallback to TikWM provider if native providers failed or returned no slides
+                if not metadata:
+                    try:
+                        metadata = await self.tikwm_provider.extract_metadata(canonical_url, job_dir)
+                        if metadata:
+                            provider = self.tikwm_provider
+                    except Exception as exc:
+                        logger.warning(f"TikWM photo fallback failed for {canonical_url}: {exc}")
 
                 if (not metadata or not metadata.items) and gallery_empty_error:
                     raise gallery_empty_error
@@ -149,11 +165,26 @@ class DownloaderService:
                 metadata = await self.yt_dlp.extract_metadata(canonical_url, job_dir)
                 provider = self.yt_dlp
                 if not metadata:
-                    metadata = await self.gallery_dl.extract_metadata(canonical_url, job_dir)
-                    provider = self.gallery_dl
+                    try:
+                        metadata = await self.gallery_dl.extract_metadata(canonical_url, job_dir)
+                        if metadata:
+                            provider = self.gallery_dl
+                    except Exception:
+                        metadata = None
                 if not metadata:
-                    metadata = await self.photo_provider.extract_metadata(canonical_url, job_dir)
-                    provider = self.photo_provider
+                    try:
+                        metadata = await self.photo_provider.extract_metadata(canonical_url, job_dir)
+                        if metadata:
+                            provider = self.photo_provider
+                    except Exception:
+                        metadata = None
+                if not metadata:
+                    try:
+                        metadata = await self.tikwm_provider.extract_metadata(canonical_url, job_dir)
+                        if metadata:
+                            provider = self.tikwm_provider
+                    except Exception:
+                        metadata = None
 
             if not metadata or not metadata.items:
                 raise DownloadError(
