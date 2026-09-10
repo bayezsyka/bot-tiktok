@@ -22,9 +22,7 @@ from app.downloader.dtos import (
 )
 from app.downloader.exceptions import (
     ContentNotSupportedError,
-    DownloadError,
     DownloadSizeLimitExceededError,
-    DownloadTimeoutError,
     TikTokChallengeError,
 )
 from app.downloader.service import DownloaderService

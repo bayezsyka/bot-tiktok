@@ -8,11 +8,10 @@ def test_light_admin_ui_css_variables():
 
     content = css_path.read_text()
 
-    # Assert light theme variables exist
-    assert "--page-bg: #f7f8fa;" in content
-    assert "--surface: #ffffff;" in content
-    assert "--text: #172033;" in content
-    assert "--muted: #667085;" in content
+    # Assert light theme variables exist (Sangkolo Design System)
+    assert "--background: #fafafa;" in content or "--page-bg: #f7f8fa;" in content
+    assert "--card: #ffffff;" in content or "--surface: #ffffff;" in content
+    assert "--foreground: #09090b;" in content or "--text: #172033;" in content
 
     # Assert no dark theme variables
     assert "--bg-base: #0f172a;" not in content

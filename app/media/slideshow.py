@@ -1,10 +1,8 @@
 import asyncio
 import logging
-import math
 import os
-import shutil
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from app.config import get_settings
 

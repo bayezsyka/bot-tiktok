@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 from pathlib import Path
@@ -17,7 +16,7 @@ from app.downloader.exceptions import DownloadError
 from app.downloader.gallery_dl_instagram_post_provider import GalleryDlInstagramPostProvider
 from app.downloader.gallery_dl_tiktok_photo_provider import GalleryDlTikTokPhotoProvider
 from app.downloader.instagram_provider import InstagramReelProvider
-from app.downloader.metadata import MediaContentMetadata, MediaItemMetadata
+from app.downloader.metadata import MediaContentMetadata
 from app.downloader.providers import DownloaderProvider
 from app.downloader.tiktok_photo_provider import TikTokPhotoProvider
 from app.downloader.tikwm_tiktok_photo_provider import TikwmTikTokPhotoProvider
@@ -287,7 +286,7 @@ class DownloaderService:
 
             if success and video_out_path.exists() and video_out_path.stat().st_size > 0:
                 v_size = video_out_path.stat().st_size
-                downloaded_items = [
+                rendered_items = [
                     DownloadedItemResult(
                         position=1,
                         media_type="video",
@@ -297,7 +296,7 @@ class DownloaderService:
                     )
                 ]
                 return DownloadedContentResult(
-                    items=tuple(downloaded_items),
+                    items=tuple(rendered_items),
                     source_size_bytes=v_size,
                 )
             else:
@@ -323,7 +322,7 @@ class DownloaderService:
                         position=item_meta.position,
                         media_type=item_meta.media_type,
                         source_url=item_meta.source_url,
-                        local_filename=str(item_meta.local_path),
+                        local_filename=item_meta.local_path,
                         source_size_bytes=size,
                     )
                 )

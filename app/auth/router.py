@@ -1,6 +1,6 @@
 from pathlib import Path
-import httpx
 
+import httpx
 from fastapi import APIRouter, Depends, Form, Request, Response, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates

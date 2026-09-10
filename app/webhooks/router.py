@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from urllib.parse import urlsplit
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.connection import get_db, get_session_maker
-from app.database.models import DownloadItem, DownloadJob, utc_now
+from app.database.models import DownloadItem, utc_now
 from app.database.repositories import (
     AllowedNumberRepository,
     JobRepository,

@@ -5,7 +5,10 @@
 {% block content %}
 <div class="page-header">
     <div>
-        <a href="/admin/history" class="text-muted" style="display: inline-flex; align-items: center; gap: 0.25rem; margin-bottom: 0.5rem; font-size: 0.875rem;">← Kembali ke Riwayat</a>
+        <a href="/admin/history" class="text-muted" style="display: inline-flex; align-items: center; gap: 0.35rem; margin-bottom: 0.5rem; font-size: 0.875rem;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></svg>
+            <span>Kembali ke Riwayat</span>
+        </a>
         <h1 class="page-title">Detail Pekerjaan #{{ job.id[:8] }}...</h1>
     </div>
     <div>
@@ -97,7 +100,7 @@
                     <div class="data-label">Ukuran Video</div>
                     <div class="data-val">
                         {% if job.source_size_bytes %}
-                            {{ (job.source_size_bytes / (1024*1024))|round(2) }} MB → {{ (job.final_size_bytes / (1024*1024))|round(2) }} MB
+                            {{ (job.source_size_bytes / (1024*1024))|round(2) }} MB &rarr; {{ (job.final_size_bytes / (1024*1024))|round(2) }} MB
                         {% else %}
                             -
                         {% endif %}
