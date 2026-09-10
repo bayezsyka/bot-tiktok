@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from starlette.middleware.sessions import SessionMiddleware
@@ -38,8 +38,14 @@ app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
 
 # Routers
 app.include_router(webhooks_router, prefix="/webhooks", tags=["webhooks"])
+app.include_router(auth_router, tags=["auth"])
 app.include_router(auth_router, prefix="/admin", tags=["auth"])
 app.include_router(admin_router, prefix="/admin", tags=["admin"])
+
+
+@app.get("/", include_in_schema=False)
+async def root_redirect() -> RedirectResponse:
+    return RedirectResponse(url="/admin")
 
 
 @app.get("/health", tags=["health"])

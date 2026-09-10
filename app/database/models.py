@@ -66,7 +66,9 @@ class DownloadJob(Base):
     platform: Mapped[str] = mapped_column(String(20), default="tiktok", index=True, nullable=False)
     original_url: Mapped[str] = mapped_column(Text, nullable=False)
     canonical_url: Mapped[str | None] = mapped_column(Text, nullable=True)
-    content_type: Mapped[str | None] = mapped_column(String(20), nullable=True)  # 'video' or 'photo'
+    content_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    selected_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    music_url: Mapped[str | None] = mapped_column(Text, nullable=True)  # 'video' or 'photo'
     status: Mapped[str] = mapped_column(String(30), default="queued", index=True, nullable=False)
     media_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sent_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

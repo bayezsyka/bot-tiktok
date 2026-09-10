@@ -1,8 +1,12 @@
+import asyncio
 import logging
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import httpx
+
+from app.config import get_settings
 from app.downloader.dtos import (
     DownloadedContentResult,
     DownloadedItemResult,
@@ -13,12 +17,13 @@ from app.downloader.exceptions import DownloadError
 from app.downloader.gallery_dl_instagram_post_provider import GalleryDlInstagramPostProvider
 from app.downloader.gallery_dl_tiktok_photo_provider import GalleryDlTikTokPhotoProvider
 from app.downloader.instagram_provider import InstagramReelProvider
-from app.downloader.metadata import MediaContentMetadata
+from app.downloader.metadata import MediaContentMetadata, MediaItemMetadata
 from app.downloader.providers import DownloaderProvider
 from app.downloader.tiktok_photo_provider import TikTokPhotoProvider
 from app.downloader.tikwm_tiktok_photo_provider import TikwmTikTokPhotoProvider
 from app.downloader.tikwm_tiktok_video_provider import TikwmTikTokVideoProvider
 from app.downloader.yt_dlp_provider import YtDlpProvider
+from app.media.slideshow import render_slideshow_video
 from app.security.urls import INSTAGRAM_POST_PATHS, check_url_security, resolve_canonical_tiktok_url
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,7 @@ class DownloaderService:
         self.tikwm_provider = TikwmTikTokPhotoProvider()
         self.ig_provider = InstagramReelProvider()
         self.ig_post_provider = GalleryDlInstagramPostProvider()
+        self.settings = get_settings()
 
     @staticmethod
     def _instagram_path_kind(canonical_url: str) -> str:
@@ -90,7 +96,6 @@ class DownloaderService:
         Resolve the canonical URL and extract metadata without opening or using a DB session.
         """
         platform = snapshot.platform or "tiktok"
-
         canonical_url = await self.resolve_canonical_url(snapshot)
 
         provider: DownloaderProvider
@@ -153,6 +158,9 @@ class DownloaderService:
 
                 if (not metadata or not metadata.items) and gallery_empty_error:
                     raise gallery_empty_error
+
+
+
             elif canonical_type == "video":
                 # Primary for /video/: yt-dlp
                 provider = self.yt_dlp
@@ -179,7 +187,7 @@ class DownloaderService:
                         user_friendly_message="Video TikTok sementara tidak dapat diproses. Silakan coba kembali.",
                     )
             else:
-                # For an unclassified path, yt-dlp returns None only for explicit non-video hints.
+                # Unclassified path
                 metadata = await self.yt_dlp.extract_metadata(canonical_url, job_dir)
                 provider = self.yt_dlp
                 if not metadata:
@@ -223,6 +231,23 @@ class DownloaderService:
             metadata=metadata,
         )
 
+    async def _download_audio_file(self, music_url: str, job_dir: Path) -> Path | None:
+        """Download background music file to job_dir."""
+        try:
+            audio_path = job_dir / "audio_source.mp3"
+            proxy = self.settings.TIKTOK_PROXY_URL or None
+            headers = {"User-Agent": "Mozilla/5.0"}
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True, headers=headers, proxy=proxy) as client:
+                resp = await client.get(music_url)
+                resp.raise_for_status()
+                with open(audio_path, "wb") as f:
+                    f.write(resp.content)
+            if audio_path.exists() and audio_path.stat().st_size > 0:
+                return audio_path
+        except Exception as e:
+            logger.warning(f"Failed to download audio from {music_url}: {e}")
+        return None
+
     async def download_content(
         self,
         snapshot: JobDownloadSnapshot,
@@ -230,16 +255,55 @@ class DownloaderService:
         metadata: MediaContentMetadata,
         job_dir: Path,
     ) -> DownloadedContentResult:
-        """Download physical files without opening or using a DB session."""
+        """Download physical files and optionally render slideshow video if selected."""
         items = list(snapshot.items)
         if items and all(item.status == "sent" or item.gateway_message_id for item in items):
             total_existing = sum(item.source_size_bytes or 0 for item in items)
             return DownloadedContentResult(items=(), source_size_bytes=total_existing)
 
         canonical_url = snapshot.canonical_url or snapshot.original_url
-
         updated_metadata = await provider.download_content(canonical_url, metadata, job_dir)
 
+        # Check if user selected Video mode for Photo content
+        selected_mode = getattr(snapshot, "selected_mode", None)
+        music_url = getattr(snapshot, "music_url", None) or getattr(metadata, "music_url", None)
+
+        if selected_mode == "video" and metadata.content_type == "photo":
+            logger.info(f"Rendering photo slideshow to video for job {snapshot.id}")
+            audio_path = None
+            if music_url:
+                audio_path = await self._download_audio_file(music_url, job_dir)
+
+            photo_paths = [item.local_path for item in updated_metadata.items if item.local_path]
+            video_out_path = job_dir / "slideshow_rendered.mp4"
+            duration = metadata.duration_seconds or 0
+
+            success = await render_slideshow_video(
+                image_paths=photo_paths,
+                audio_path=audio_path,
+                output_path=video_out_path,
+                duration_seconds=duration,
+            )
+
+            if success and video_out_path.exists() and video_out_path.stat().st_size > 0:
+                v_size = video_out_path.stat().st_size
+                downloaded_items = [
+                    DownloadedItemResult(
+                        position=1,
+                        media_type="video",
+                        source_url=None,
+                        local_filename=str(video_out_path.resolve()),
+                        source_size_bytes=v_size,
+                    )
+                ]
+                return DownloadedContentResult(
+                    items=tuple(downloaded_items),
+                    source_size_bytes=v_size,
+                )
+            else:
+                logger.warning("Slideshow video rendering failed, falling back to individual photos.")
+
+        # Default photo or normal video flow
         total_source_size = 0
         items_dict = {item.position: item for item in items}
         downloaded_items: list[DownloadedItemResult] = []
@@ -269,33 +333,7 @@ class DownloaderService:
                     user_friendly_message="Gagal mengunduh file media. File tidak ditemukan.",
                 )
 
-        # Verify no non-sent item is left without a local_filename
-        downloaded_positions = {item.position for item in downloaded_items}
-        for item in items:
-            if item.status != "sent" and not item.gateway_message_id:
-                if item.position in downloaded_positions:
-                    continue
-                if item.local_filename and os.path.exists(item.local_filename):
-                    total_source_size += item.source_size_bytes or os.path.getsize(item.local_filename)
-                    continue
-                raise DownloadError(
-                    f"Item posisi {item.position} tidak memiliki file hasil unduhan lokal.",
-                    user_friendly_message="Gagal mengunduh seluruh file media.",
-                )
-
         return DownloadedContentResult(
             items=tuple(downloaded_items),
             source_size_bytes=total_source_size,
-        )
-
-    async def extract_and_prepare_job(self, *args: object, **kwargs: object) -> object:
-        raise RuntimeError(
-            "extract_and_prepare_job was removed from the production path. "
-            "Use extract_metadata(snapshot, job_dir) and persist metadata in a short DB session."
-        )
-
-    async def download_job_content(self, *args: object, **kwargs: object) -> object:
-        raise RuntimeError(
-            "download_job_content was removed from the production path. "
-            "Use download_content(snapshot, provider, metadata, job_dir) without a DB session."
         )

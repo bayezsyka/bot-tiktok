@@ -62,6 +62,14 @@ async def init_db(engine: AsyncEngine) -> None:
             await conn.execute(text("ALTER TABLE download_jobs ADD COLUMN last_gateway_sync_at DATETIME;"))
             await conn.execute(text("ALTER TABLE download_jobs ADD COLUMN failure_notification_sent_at DATETIME;"))
 
+        # Migration 6: Add selected_mode and music_url to download_jobs
+        result = await conn.execute(text("PRAGMA table_info(download_jobs);"))
+        job_cols = [row[1] for row in result.fetchall()]
+        if "selected_mode" not in job_cols:
+            logger.info("Migrating schema: Adding selected_mode and music_url to download_jobs")
+            await conn.execute(text("ALTER TABLE download_jobs ADD COLUMN selected_mode VARCHAR(20);"))
+            await conn.execute(text("ALTER TABLE download_jobs ADD COLUMN music_url TEXT;"))
+
         # Migration 5: Add index for gateway_message_id
         result = await conn.execute(text("PRAGMA index_list(download_items);"))
         indexes = [row[1] for row in result.fetchall()]
@@ -79,6 +87,7 @@ async def init_db(engine: AsyncEngine) -> None:
             "004_add_gateway_delivery_fields",
             "005_add_gateway_message_id_index",
             "006_add_pending_since_at",
+            "007_add_selected_mode_and_music_url",
         ]
         for version in migrations:
             await conn.execute(

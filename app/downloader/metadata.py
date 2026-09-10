@@ -14,6 +14,7 @@ class MediaContentMetadata(BaseModel):
     title: str | None = None
     author: str | None = None
     duration_seconds: int = 0
+    music_url: str | None = None
     items: list[MediaItemMetadata]
 
 

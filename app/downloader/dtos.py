@@ -25,6 +25,8 @@ class JobDownloadSnapshot:
     canonical_url: str | None
     platform: str
     items: tuple[ItemProcessingSnapshot, ...]
+    selected_mode: str | None = None
+    music_url: str | None = None
 
 
 @dataclass(frozen=True)

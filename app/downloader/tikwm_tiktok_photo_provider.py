@@ -158,16 +158,26 @@ class TikwmTikTokPhotoProvider(DownloaderProvider):
             for idx, url in enumerate(valid_urls)
         ]
 
+        # Extract background music / sound if present
+        music_url = payload.get("music") or payload.get("play") or None
+        music_duration = 0
+        music_info = payload.get("music_info")
+        if isinstance(music_info, dict):
+            music_duration = int(music_info.get("duration") or 0)
+        elif isinstance(payload.get("duration"), (int, float)):
+            music_duration = int(payload.get("duration") or 0)
+
         logger.info(
             f"provider=tikwm platform=tiktok content_type=photo result=success "
-            f"item_id={item_id} image_count={len(items)} elapsed_seconds={elapsed:.2f}"
+            f"item_id={item_id} image_count={len(items)} has_music={bool(music_url)} elapsed_seconds={elapsed:.2f}"
         )
 
         return MediaContentMetadata(
             content_type="photo",
             title=title,
             author=author,
-            duration_seconds=0,
+            duration_seconds=music_duration,
+            music_url=music_url,
             items=items,
         )
 

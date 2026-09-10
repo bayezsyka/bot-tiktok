@@ -291,6 +291,21 @@ class JobRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def get_awaiting_choice_job_for_number(self, sender_number: str) -> DownloadJob | None:
+        stmt = (
+            select(DownloadJob)
+            .options(selectinload(DownloadJob.items))
+            .execution_options(populate_existing=True)
+            .where(
+                DownloadJob.sender_number == sender_number,
+                DownloadJob.status == "awaiting_choice"
+            )
+            .order_by(desc(DownloadJob.created_at))
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def create_job(
         self,
         inbound_message_id: str,
@@ -299,6 +314,9 @@ class JobRepository:
         original_url: str,
         canonical_url: str | None = None,
         platform: str = "tiktok",
+        status: str = "queued",
+        selected_mode: str | None = None,
+        music_url: str | None = None,
     ) -> DownloadJob:
         job = DownloadJob(
             inbound_message_id=inbound_message_id,
@@ -307,7 +325,9 @@ class JobRepository:
             platform=platform,
             original_url=original_url,
             canonical_url=canonical_url,
-            status="queued",
+            status=status,
+            selected_mode=selected_mode,
+            music_url=music_url,
             queued_at=utc_now(),
         )
         self.session.add(job)
