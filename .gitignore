@@ -35,3 +35,9 @@ htmlcov/
 # OS generated files
 .DS_Store
 Thumbs.db
+.cache/
+storage/*.db
+storage/secrets/
+*.pyc
+__pycache__/
+.venv/
