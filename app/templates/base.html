@@ -15,6 +15,9 @@
             if (collapsed) {
                 document.documentElement.classList.add('sidebar-collapsed');
             }
+            if (localStorage.getItem('app.theme') === 'dark') {
+                document.documentElement.classList.add('dark');
+            }
         })();
     </script>
 </head>
@@ -191,6 +194,14 @@
                 </div>
             </div>
 
+            <!-- Theme Switcher -->
+            <button type="button" class="footer-btn" onclick="toggleTheme()" title="Ganti tema">
+                <span class="icon-slot">
+                    <svg class="icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+                </span>
+                <span class="nav-label">Tema</span>
+            </button>
+
             <!-- Website Link -->
             <a href="https://sangkolo.com" target="_blank" class="footer-btn" title="Lihat Website">
                 <span class="icon-slot">
@@ -237,6 +248,11 @@
         function toggleSidebarCollapse() {
             var isCollapsed = document.documentElement.classList.toggle('sidebar-collapsed');
             localStorage.setItem('app.sidebar.collapsed', isCollapsed ? 'true' : 'false');
+        }
+
+        function toggleTheme() {
+            var isDark = document.documentElement.classList.toggle('dark');
+            localStorage.setItem('app.theme', isDark ? 'dark' : 'light');
         }
 
         function handleSidebarHover(hovered) {
