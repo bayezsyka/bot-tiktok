@@ -182,6 +182,13 @@ async def handle_farros_wa_webhook(
                 mapped_phone = resolve_lid_to_phone(lid_to_lookup)
                 if mapped_phone:
                     allowed_number = await number_repo.get_by_phone(mapped_phone)
+            if not allowed_number and parsed.sender_number:
+                phone_cand = normalize_phone_number(parsed.sender_number)
+                if phone_cand:
+                    allowed_number = await number_repo.get_by_phone(phone_cand)
+                    if allowed_number and not allowed_number.lid_number:
+                        allowed_number.lid_number = lid_to_lookup
+                        await db.commit()
 
         if not allowed_number:
             if lid_to_lookup:
