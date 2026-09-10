@@ -480,3 +480,25 @@ input:focus, select:focus, textarea:focus {
 .text-center { text-align: center; }
 .text-error { color: var(--danger); font-size: 0.85rem; }
 .inline-form { display: inline; }
+
+/* Timeline */
+.timeline-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+.timeline-dot-success {
+  background-color: #16a34a;
+}
+.timeline-dot-danger {
+  background-color: #ef4444;
+}
+.timeline-dot-neutral {
+  background-color: #e4e4e7;
+}
+

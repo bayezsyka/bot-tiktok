@@ -784,3 +784,25 @@ tr:hover td {
   background-color: var(--destructive);
   color: #ffffff;
 }
+
+/* Timeline */
+.timeline-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+.timeline-dot-success {
+  background-color: #16a34a;
+}
+.timeline-dot-danger {
+  background-color: var(--destructive);
+}
+.timeline-dot-neutral {
+  background-color: var(--border);
+}
+

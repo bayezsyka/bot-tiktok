@@ -123,10 +123,10 @@
         <h2 class="card-title">Lini Masa Pekerjaan</h2>
         
         <div style="display: flex; flex-direction: column; gap: 1.5rem; position: relative; padding-left: 1rem;">
-            <div style="position: absolute; left: 16px; top: 10px; bottom: 10px; width: 2px; background-color: var(--color-border); z-index: 0;"></div>
+            <div style="position: absolute; left: 16px; top: 10px; bottom: 10px; width: 2px; background-color: var(--border); z-index: 0;"></div>
             
             <div style="display: flex; gap: 1.25rem; position: relative; z-index: 1;">
-                <div style="width: 14px; height: 14px; border-radius: 50%; background-color: {% if job.queued_at %}var(--status-success){% else %}var(--color-border){% endif %}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 6px;"></div>
+                <div class="timeline-dot {% if job.queued_at %}timeline-dot-success{% else %}timeline-dot-neutral{% endif %}"></div>
                 <div>
                     <h4 style="font-size: 0.9375rem; font-weight: 700; margin-bottom: 0.125rem;">Masuk ke Antrean (Queued)</h4>
                     <p class="text-xs text-muted">{{ job.queued_at | local_datetime if job.queued_at else '-' }}</p>
@@ -134,7 +134,7 @@
             </div>
             
             <div style="display: flex; gap: 1.25rem; position: relative; z-index: 1;">
-                <div style="width: 14px; height: 14px; border-radius: 50%; background-color: {% if job.started_at %}var(--status-success){% else %}var(--color-border){% endif %}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 6px;"></div>
+                <div class="timeline-dot {% if job.started_at %}timeline-dot-success{% else %}timeline-dot-neutral{% endif %}"></div>
                 <div>
                     <h4 style="font-size: 0.9375rem; font-weight: 700; margin-bottom: 0.125rem;">Mulai Diproses (Started)</h4>
                     <p class="text-xs text-muted">{{ job.started_at | local_datetime if job.started_at else 'Belum dimulai' }}</p>
@@ -142,7 +142,7 @@
             </div>
             
             <div style="display: flex; gap: 1.25rem; position: relative; z-index: 1;">
-                <div style="width: 14px; height: 14px; border-radius: 50%; background-color: {% if job.completed_at %}var(--status-success){% elif job.status == 'failed' %}var(--status-danger){% else %}var(--color-border){% endif %}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 6px;"></div>
+                <div class="timeline-dot {% if job.completed_at %}timeline-dot-success{% elif job.status == 'failed' %}timeline-dot-danger{% else %}timeline-dot-neutral{% endif %}"></div>
                 <div>
                     <h4 style="font-size: 0.9375rem; font-weight: 700; margin-bottom: 0.125rem;">Selesai</h4>
                     <p class="text-xs text-muted">{{ job.completed_at | local_datetime if job.completed_at else 'Masih dalam proses' }}</p>
