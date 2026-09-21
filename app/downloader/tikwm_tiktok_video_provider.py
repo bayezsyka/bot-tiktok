@@ -44,6 +44,52 @@ class TikwmTikTokVideoProvider(DownloaderProvider):
         metadata = await self.extract_metadata(canonical_url, job_dir)
         return bool(metadata and metadata.content_type == "video" and len(metadata.items) > 0)
 
+    async def _fetch_fresh_video_url(self, canonical_url: str) -> str | None:
+        """Re-fetch a fresh signed CDN URL from TikWM API. Used when the cached URL expires."""
+        item_id = extract_item_id_from_url(canonical_url) or "unknown"
+        api_url = getattr(self.settings, "TIKWM_API_URL", "https://www.tikwm.com/api/")
+        if not api_url:
+            return None
+
+        proxy = self.settings.TIKTOK_PROXY_URL or None
+        timeout = 30.0
+
+        params = {"url": canonical_url, "hd": "1"}
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=True,
+                headers=DEFAULT_HEADERS,
+                verify=True,
+                proxy=proxy,
+            ) as client:
+                resp = await client.get(api_url, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as e:
+            logger.warning(
+                f"provider=tikwm platform=tiktok content_type=video result=refresh_failure "
+                f"item_id={item_id} error={_sanitize_error_message(str(e))}"
+            )
+            return None
+
+        if not isinstance(data, dict) or data.get("code") != 0:
+            return None
+
+        payload: dict[str, Any] = data.get("data") or {}
+        if not isinstance(payload, dict):
+            return None
+
+        video_url = payload.get("hdplay") or payload.get("play") or payload.get("wmplay")
+        if not isinstance(video_url, str) or not video_url.startswith("http"):
+            return None
+
+        logger.info(
+            f"provider=tikwm platform=tiktok content_type=video result=url_refreshed item_id={item_id}"
+        )
+        return video_url
+
     async def extract_metadata(
         self, canonical_url: str, job_dir: Path
     ) -> MediaContentMetadata | None:
@@ -164,6 +210,65 @@ class TikwmTikTokVideoProvider(DownloaderProvider):
             items=items,
         )
 
+    async def _stream_video_url(
+        self,
+        video_url: str,
+        output_file: Path,
+        max_bytes: int,
+        proxy: str | None,
+        headers: dict,
+    ) -> int:
+        """Stream video from URL to output_file. Returns total bytes streamed. Raises on error."""
+        async with httpx.AsyncClient(
+            timeout=float(self.settings.JOB_TIMEOUT_SECONDS),
+            follow_redirects=True,
+            headers=headers,
+            verify=True,
+            proxy=proxy,
+        ) as client:
+            async with client.stream("GET", video_url) as resp:
+                resp.raise_for_status()
+
+                content_type = resp.headers.get("content-type", "").lower()
+                if "text/html" in content_type or "application/json" in content_type:
+                    raise DownloadError("Server TikWM mengembalikan response non-video.")
+
+                content_length_str = resp.headers.get("content-length")
+                if content_length_str and content_length_str.isdigit():
+                    if int(content_length_str) > max_bytes:
+                        raise DownloadSizeLimitExceededError(
+                            "Ukuran video TikWM melebihi batas maksimal.",
+                            user_friendly_message="Ukuran video asli melebihi batas maksimal unduhan.",
+                        )
+
+                total_streamed = 0
+                first_chunk = True
+                with open(output_file, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=65536):
+                        if not chunk:
+                            continue
+                        if first_chunk:
+                            first_chunk = False
+                            header = chunk[:64].lstrip()
+                            if header.startswith(
+                                (b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML", b'{"', b"{'")
+                            ):
+                                raise DownloadError(
+                                    "File video hasil unduhan bukan stream video yang valid."
+                                )
+                        total_streamed += len(chunk)
+                        if total_streamed > max_bytes:
+                            raise DownloadSizeLimitExceededError(
+                                "Ukuran video TikWM melebihi batas maksimal.",
+                                user_friendly_message="Ukuran video asli melebihi batas maksimal unduhan.",
+                            )
+                        f.write(chunk)
+
+                if total_streamed == 0:
+                    raise DownloadError("File video hasil unduhan kosong atau tidak ditemukan.")
+
+                return total_streamed
+
     async def download_content(
         self, canonical_url: str, metadata: MediaContentMetadata, job_dir: Path
     ) -> MediaContentMetadata:
@@ -179,56 +284,53 @@ class TikwmTikTokVideoProvider(DownloaderProvider):
             "Accept": "video/mp4,video/*,*/*;q=0.8",
         }
 
+        video_url = metadata.items[0].source_url
+
         try:
-            async with httpx.AsyncClient(
-                timeout=float(self.settings.JOB_TIMEOUT_SECONDS),
-                follow_redirects=True,
-                headers=headers,
-                verify=True,
-                proxy=proxy,
-            ) as client:
-                async with client.stream("GET", metadata.items[0].source_url) as resp:
-                    resp.raise_for_status()
-
-                    content_type = resp.headers.get("content-type", "").lower()
-                    if "text/html" in content_type or "application/json" in content_type:
-                        raise DownloadError("Server TikWM mengembalikan response non-video.")
-
-                    content_length_str = resp.headers.get("content-length")
-                    if content_length_str and content_length_str.isdigit():
-                        if int(content_length_str) > max_bytes:
-                            raise DownloadSizeLimitExceededError(
-                                "Ukuran video TikWM melebihi batas maksimal.",
-                                user_friendly_message="Ukuran video asli melebihi batas maksimal unduhan.",
-                            )
-
-                    total_streamed = 0
-                    first_chunk = True
-                    with open(output_file, "wb") as f:
-                        async for chunk in resp.aiter_bytes(chunk_size=65536):
-                            if not chunk:
-                                continue
-                            if first_chunk:
-                                first_chunk = False
-                                header = chunk[:64].lstrip()
-                                if header.startswith(
-                                    (b"<!DOCTYPE", b"<!doctype", b"<html", b"<HTML", b"{\"", b"{'")
-                                ):
-                                    raise DownloadError(
-                                        "File video hasil unduhan bukan stream video yang valid."
-                                    )
-                            total_streamed += len(chunk)
-                            if total_streamed > max_bytes:
-                                raise DownloadSizeLimitExceededError(
-                                    "Ukuran video TikWM melebihi batas maksimal.",
-                                    user_friendly_message="Ukuran video asli melebihi batas maksimal unduhan.",
-                                )
-                            f.write(chunk)
-
-                    if total_streamed == 0:
-                        raise DownloadError("File video hasil unduhan kosong atau tidak ditemukan.")
-
-        except (DownloadError, DownloadSizeLimitExceededError):
+            await self._stream_video_url(video_url, output_file, max_bytes, proxy, headers)
+        except (DownloadSizeLimitExceededError, ContentNotSupportedError):
+            self._cleanup_downloaded_videos(job_dir)
+            raise
+        except httpx.HTTPStatusError as e:
+            # CDN URL expired (404) or geo-blocked (403) — re-fetch a fresh URL from TikWM
+            status_code = e.response.status_code
+            if status_code in (403, 404):
+                logger.warning(
+                    f"provider=tikwm platform=tiktok content_type=video result=cdn_expired "
+                    f"status={status_code} url={canonical_url} — refreshing CDN URL"
+                )
+                self._cleanup_downloaded_videos(job_dir)
+                fresh_url = await self._fetch_fresh_video_url(canonical_url)
+                if fresh_url and fresh_url != video_url:
+                    try:
+                        await self._stream_video_url(fresh_url, output_file, max_bytes, proxy, headers)
+                        logger.info(
+                            f"provider=tikwm platform=tiktok content_type=video result=cdn_refresh_success "
+                            f"url={canonical_url}"
+                        )
+                    except (DownloadSizeLimitExceededError, ContentNotSupportedError):
+                        self._cleanup_downloaded_videos(job_dir)
+                        raise
+                    except Exception as retry_err:
+                        self._cleanup_downloaded_videos(job_dir)
+                        sanitized = _sanitize_error_message(str(retry_err))
+                        raise DownloadError(
+                            f"Gagal mengunduh video TikWM setelah refresh URL: {sanitized}",
+                            user_friendly_message="Terjadi gangguan saat mengunduh file video.",
+                        ) from retry_err
+                else:
+                    raise DownloadError(
+                        f"URL CDN video TikWM expired (HTTP {status_code}) dan gagal mendapat URL baru.",
+                        user_friendly_message="Terjadi gangguan saat mengunduh file video.",
+                    ) from e
+            else:
+                self._cleanup_downloaded_videos(job_dir)
+                sanitized = _sanitize_error_message(str(e))
+                raise DownloadError(
+                    f"Gagal mengunduh video TikWM: {sanitized}",
+                    user_friendly_message="Terjadi gangguan saat mengunduh file video.",
+                ) from e
+        except DownloadError:
             self._cleanup_downloaded_videos(job_dir)
             raise
         except Exception as e:
